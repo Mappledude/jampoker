@@ -15,46 +15,85 @@
     </nav>
 
     <div class="card">
-      <h1>Admin</h1>
-      <p class="small">Click the button to save a test document to Firestore.</p>
+      <h1>Admin — Players</h1>
+      <p class="small">Add a player. Each new player starts with $1,000.00 (walletCents = 100000).</p>
 
-      <button id="test-save" style="padding:10px 14px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:600;cursor:pointer">
-        Save test to Firestore
-      </button>
+      <div style="display:flex; gap:8px; align-items:center; margin:12px 0;">
+        <input id="player-name" placeholder="Player name" style="padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb;flex:1" />
+        <button id="add-player" style="padding:10px 14px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:600;cursor:pointer">
+          Add Player
+        </button>
+      </div>
+      <p id="add-status" class="small"></p>
+    </div>
 
-      <p id="save-status" class="small"></p>
+    <div class="card" style="margin-top:16px;">
+      <h2 style="margin-top:0;">Players</h2>
+      <div id="players-list" class="small">Loading players…</div>
     </div>
   </div>
 
-  <!-- Load your Firebase app config -->
+  <!-- Firebase init -->
   <script type="module" src="/firebase-init.js"></script>
 
-  <!-- Firestore test (uses your initialized app) -->
+  <!-- Firestore: create + list players -->
   <script type="module">
     import { app } from "/firebase-init.js";
     import {
-      getFirestore,
-      doc,
-      setDoc,
-      serverTimestamp
+      getFirestore, collection, addDoc, serverTimestamp,
+      query, orderBy, onSnapshot
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const db = getFirestore(app);
-    const btn = document.getElementById("test-save");
-    const statusEl = document.getElementById("save-status");
+    const playersCol = collection(db, "players");
 
-    btn.addEventListener("click", async () => {
-      statusEl.textContent = "Saving...";
+    const addBtn = document.getElementById("add-player");
+    const nameInput = document.getElementById("player-name");
+    const statusEl = document.getElementById("add-status");
+    const listEl = document.getElementById("players-list");
+
+    const dollars = (cents) =>
+      `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`;
+
+    addBtn.addEventListener("click", async () => {
+      const name = (nameInput.value || "").trim();
+      if (!name) {
+        statusEl.textContent = "Please enter a name.";
+        return;
+      }
+      statusEl.textContent = "Saving…";
+      addBtn.disabled = true;
       try {
-        await setDoc(
-          doc(db, "health", "check"),
-          { now: serverTimestamp(), note: "hello from JamPoker Admin" },
-          { merge: true }
-        );
-        statusEl.textContent = "Saved to Firestore ✔";
+        await addDoc(playersCol, {
+          name,
+          walletCents: 100000, // $1,000.00
+          createdAt: serverTimestamp()
+        });
+        statusEl.textContent = "Player added ✔";
+        nameInput.value = "";
+        nameInput.focus();
       } catch (err) {
         statusEl.textContent = "Error: " + (err?.message || err);
+      } finally {
+        addBtn.disabled = false;
       }
+    });
+
+    // live list
+    const q = query(playersCol, orderBy("createdAt", "desc"));
+    onSnapshot(q, (snap) => {
+      if (snap.empty) {
+        listEl.textContent = "No players yet.";
+        return;
+      }
+      const rows = [];
+      snap.forEach(docSnap => {
+        const d = docSnap.data();
+        const name = d.name || "(no name)";
+        const wallet = typeof d.walletCents === "number" ? dollars(d.walletCents) : "(no wallet)";
+        rows.push(`<div>${name} — ${wallet}</div>`);
+      });
+      listEl.innerHTML = rows.join("");
     });
   </script>
 </body>
