@@ -16,8 +16,51 @@
 
     <div class="card">
       <h1>Lobby</h1>
-      <p class="small">This is where players will see open tables and join.</p>
+      <p class="small">Live check from Firestore (collection <code>health</code> / doc <code>check</code>):</p>
+      <p id="health-status" class="small"></p>
+      <p id="health-time" class="small"></p>
     </div>
   </div>
+
+  <!-- Firebase init -->
+  <script type="module" src="/firebase-init.js"></script>
+
+  <!-- Read from Firestore -->
+  <script type="module">
+    import { app } from "/firebase-init.js";
+    import {
+      getFirestore,
+      doc,
+      getDoc
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const db = getFirestore(app);
+    const statusEl = document.getElementById("health-status");
+    const timeEl = document.getElementById("health-time");
+
+    (async () => {
+      statusEl.textContent = "Loading...";
+      try {
+        const ref = doc(db, "health", "check");
+        const snap = await getDoc(ref);
+        if (snap.exists()) {
+          const data = snap.data();
+          statusEl.textContent = "Found note: " + (data.note || "(no note)");
+          const ts = data.now;
+          if (ts && typeof ts.toDate === "function") {
+            timeEl.textContent = "Last saved: " + ts.toDate().toLocaleString();
+          } else {
+            timeEl.textContent = "Last saved: (pending server time)";
+          }
+        } else {
+          statusEl.textContent = "No health/check doc yet.";
+          timeEl.textContent = "";
+        }
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err?.message || err);
+        timeEl.textContent = "";
+      }
+    })();
+  </script>
 </body>
 </html>
