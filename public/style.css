@@ -1,0 +1,10 @@
+:root { --bg:#0f172a; --card:#111827; --ink:#e5e7eb; --link:#38bdf8; }
+*{ box-sizing:border-box; }
+html,body{ margin:0; padding:0; font-family:system-ui,-apple-system,Arial,sans-serif; background:var(--bg); color:var(--ink); }
+.wrap{ max-width:900px; margin:0 auto; padding:24px; }
+.nav{ display:flex; gap:14px; align-items:center; border-bottom:1px solid #334155; padding:14px 0; margin-bottom:18px; }
+.nav a{ color:var(--link); text-decoration:none; font-weight:600; }
+.nav a:hover{ text-decoration:underline; }
+.card{ background:var(--card); border:1px solid #334155; border-radius:14px; padding:18px; }
+h1{ margin:0 0 8px 0; font-size:28px; }
+.small{ opacity:.7; font-size:14px; }
