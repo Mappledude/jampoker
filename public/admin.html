@@ -16,8 +16,46 @@
 
     <div class="card">
       <h1>Admin</h1>
-      <p class="small">This is where you’ll create players and tables.</p>
+      <p class="small">Click the button to save a test document to Firestore.</p>
+
+      <button id="test-save" style="padding:10px 14px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:600;cursor:pointer">
+        Save test to Firestore
+      </button>
+
+      <p id="save-status" class="small"></p>
     </div>
   </div>
+
+  <!-- Load your Firebase app config -->
+  <script type="module" src="/firebase-init.js"></script>
+
+  <!-- Firestore test (uses your initialized app) -->
+  <script type="module">
+    import { app } from "/firebase-init.js";
+    import {
+      getFirestore,
+      doc,
+      setDoc,
+      serverTimestamp
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    const db = getFirestore(app);
+    const btn = document.getElementById("test-save");
+    const statusEl = document.getElementById("save-status");
+
+    btn.addEventListener("click", async () => {
+      statusEl.textContent = "Saving...";
+      try {
+        await setDoc(
+          doc(db, "health", "check"),
+          { now: serverTimestamp(), note: "hello from JamPoker Admin" },
+          { merge: true }
+        );
+        statusEl.textContent = "Saved to Firestore ✔";
+      } catch (err) {
+        statusEl.textContent = "Error: " + (err?.message || err);
+      }
+    });
+  </script>
 </body>
 </html>
