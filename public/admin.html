@@ -36,24 +36,35 @@
   <!-- Firebase init -->
   <script type="module" src="/firebase-init.js"></script>
 
-  <!-- Firestore: create + list players -->
+  <!-- Firestore: create + list + edit wallet + delete -->
   <script type="module">
     import { app } from "/firebase-init.js";
     import {
       getFirestore, collection, addDoc, serverTimestamp,
-      query, orderBy, onSnapshot
+      query, orderBy, onSnapshot, doc, updateDoc, deleteDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const db = getFirestore(app);
     const playersCol = collection(db, "players");
 
+    // --- helpers ---
+    const dollars = (cents) =>
+      `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`;
+
+    const parseDollarsToCents = (input) => {
+      // remove $ , spaces
+      const clean = String(input).replace(/[^0-9.]/g, "");
+      if (!clean) return null;
+      const value = Number(clean);
+      if (Number.isNaN(value)) return null;
+      // round to cents
+      return Math.max(0, Math.round(value * 100));
+    };
+
+    // --- add player ---
     const addBtn = document.getElementById("add-player");
     const nameInput = document.getElementById("player-name");
     const statusEl = document.getElementById("add-status");
-    const listEl = document.getElementById("players-list");
-
-    const dollars = (cents) =>
-      `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`;
 
     addBtn.addEventListener("click", async () => {
       const name = (nameInput.value || "").trim();
@@ -79,7 +90,28 @@
       }
     });
 
-    // live list
+    // --- live list with edit + delete ---
+    const listEl = document.getElementById("players-list");
+
+    const renderRow = (id, d) => {
+      const name = d.name || "(no name)";
+      const wallet = typeof d.walletCents === "number" ? dollars(d.walletCents) : "$0.00";
+      return `
+        <div class="row" data-id="${id}" style="display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 0;border-bottom:1px solid #334155">
+          <div>
+            <div style="font-weight:600">${name}</div>
+            <div class="small">ID: <code>${id}</code></div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center; flex-wrap:wrap; justify-content:flex-end">
+            <input class="wallet-input" value="${wallet}" aria-label="Wallet amount" style="width:150px;padding:8px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb;text-align:right" />
+            <button class="save-btn" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;cursor:pointer">Save</button>
+            <button class="delete-btn" style="padding:8px 12px;border-radius:10px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-weight:700;cursor:pointer">Delete</button>
+          </div>
+          <div class="row-status small" style="grid-column:1 / -1; min-height:1em;"></div>
+        </div>
+      `;
+    };
+
     const q = query(playersCol, orderBy("createdAt", "desc"));
     onSnapshot(q, (snap) => {
       if (snap.empty) {
@@ -87,13 +119,44 @@
         return;
       }
       const rows = [];
-      snap.forEach(docSnap => {
-        const d = docSnap.data();
-        const name = d.name || "(no name)";
-        const wallet = typeof d.walletCents === "number" ? dollars(d.walletCents) : "(no wallet)";
-        rows.push(`<div>${name} — ${wallet}</div>`);
-      });
+      snap.forEach(docSnap => rows.push(renderRow(docSnap.id, docSnap.data())));
       listEl.innerHTML = rows.join("");
+    });
+
+    // event delegation for Save/Delete
+    listEl.addEventListener("click", async (e) => {
+      const row = e.target.closest(".row");
+      if (!row) return;
+      const id = row.getAttribute("data-id");
+      const status = row.querySelector(".row-status");
+
+      if (e.target.classList.contains("save-btn")) {
+        const input = row.querySelector(".wallet-input");
+        const cents = parseDollarsToCents(input.value);
+        if (cents === null) {
+          status.textContent = "Enter a valid dollar amount (e.g., 25 or 25.50).";
+          return;
+        }
+        status.textContent = "Saving…";
+        try {
+          await updateDoc(doc(db, "players", id), { walletCents: cents });
+          status.textContent = "Updated ✔";
+        } catch (err) {
+          status.textContent = "Error: " + (err?.message || err);
+        }
+      }
+
+      if (e.target.classList.contains("delete-btn")) {
+        const ok = confirm("Delete this player? This cannot be undone.");
+        if (!ok) return;
+        status.textContent = "Deleting…";
+        try {
+          await deleteDoc(doc(db, "players", id));
+          // onSnapshot will re-render automatically
+        } catch (err) {
+          status.textContent = "Error: " + (err?.message || err);
+        }
+      }
     });
   </script>
 </body>
