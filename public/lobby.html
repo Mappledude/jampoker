@@ -43,13 +43,21 @@
     const seatUnsubs = new Map();
     const handUnsubs = new Map();
 
-    const renderTable = (id, d, seatsHtml, seatCount, hand) => {
+    const renderTable = (id, d, seatsHtml, seatCount, hand, seatMap) => {
       const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
       const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
       let banner;
+      let potLine = "";
+      let posLine = "";
       if (hand) {
         const vLabel = hand.variant === "omaha" ? "Omaha" : "Hold'em";
         banner = `Current Hand: ${vLabel} • Dealer: ${hand.dealerName || ""} • Status: ${hand.status}`;
+        potLine = `<div class=\"small\">Pot: ${dollars(hand.potCents || 0)}</div>`;
+        const getName = (n) => seatMap?.find(s => s.seatNum === n)?.playerName || "(left)";
+        const sbName = getName(hand.positions?.sbSeatNum);
+        const bbName = getName(hand.positions?.bbSeatNum);
+        const dealerName = hand.dealerName || getName(hand.positions?.dealerSeatNum);
+        posLine = `<div class=\"small\">Positions: Dealer ${dealerName}, SB ${sbName}, BB ${bbName}</div>`;
       } else {
         banner = seatCount < 2 ? "Waiting for players…" : "Waiting for next dealer’s choice…";
       }
@@ -71,6 +79,7 @@
               <div class="small">Blinds: ${blindStr}</div>
               <div class="small">Buy-in: ${rangeStr}</div>
               <div class="small" style="margin-top:4px;">${banner}</div>
+              ${potLine}${posLine}
               <div class="small">${nextDealerLine}</div>
             </div>
             <div>
@@ -98,14 +107,20 @@
         el.style.display = 'block';
         const ndName = b.data.nextDealerName ?? 'null';
         const ndId = b.data.nextDealerId ?? 'null';
-        el.textContent = `id=${b.id}\nseats=${b.seatCount}\ncurrentHandId=${b.data.currentHandId ?? 'null'}\nnextDealer=${ndName} (${ndId})\nnextVariantId=${b.data.nextVariantId ?? 'null'}`;
+        let extra = '';
+        if (b.hand) {
+          const p = b.hand.positions || {};
+          const contrib = b.hand.contributions ? JSON.stringify(b.hand.contributions) : '{}';
+          extra = `\npositions=${p.dealerSeatNum ?? 'null'},${p.sbSeatNum ?? 'null'},${p.bbSeatNum ?? 'null'}\ncontrib=${contrib}`;
+        }
+        el.textContent = `id=${b.id}\nseats=${b.seatCount}\ncurrentHandId=${b.data.currentHandId ?? 'null'}\nnextDealer=${ndName} (${ndId})\nnextVariantId=${b.data.nextVariantId ?? 'null'}${extra}`;
       } else {
         el.style.display = 'none';
       }
     };
 
     const renderAll = () => {
-      listEl.innerHTML = blocks.length ? blocks.map(b => renderTable(b.id, b.data, b.seatsHtml, b.seatCount, b.hand)).join("") : "No active tables.";
+      listEl.innerHTML = blocks.length ? blocks.map(b => renderTable(b.id, b.data, b.seatsHtml, b.seatCount, b.hand, b.seatMap)).join("") : "No active tables.";
       blocks.forEach(updateDebug);
     };
 
@@ -120,15 +135,17 @@
         const id = docSnap.id;
         const d = docSnap.data();
         if (!d.active) return;
-        blocks.push({ id, data: d, seatsHtml: "Loading…", seatCount: 0, hand: null });
+        blocks.push({ id, data: d, seatsHtml: "Loading…", seatCount: 0, hand: null, seatMap: [] });
         const seatsRef = subcol(doc(db, "tables", id), "seats");
         const unsubSeats = onSnapshot(seatsRef, (seatSnap) => {
           const seated = [];
+          const seatMap = [];
           let activeCount = 0;
           seatSnap.forEach(s => {
             const sd = s.data();
             if (sd.active !== false) {
-              seated.push(`<div style=\"display:flex;justify-content:space-between;\"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
+              seated.push(`<div style=\\"display:flex;justify-content:space-between;\\"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
+              seatMap.push({ seatNum: sd.seatNum, playerName: sd.playerName || sd.playerId });
               activeCount++;
             }
           });
@@ -136,6 +153,7 @@
           if (idx >= 0) {
             blocks[idx].seatsHtml = seated.join("") || "(none yet)";
             blocks[idx].seatCount = activeCount;
+            blocks[idx].seatMap = seatMap;
             renderAll();
           }
         });
