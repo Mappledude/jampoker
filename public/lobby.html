@@ -14,50 +14,187 @@
       <a href="/admin.html">Admin</a>
     </nav>
 
-    <div class="card">
+    <div id="you"></div>
+
+    <div class="card" style="margin-top:16px;">
       <h1>Lobby</h1>
-      <p class="small">Showing ACTIVE tables. (Join flow coming soon.)</p>
+      <p class="small">Join a table as the selected player. Your buy-in must be between min/max and ≤ your wallet.</p>
       <div id="tables" class="small">Loading tables…</div>
     </div>
   </div>
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { app } from "/firebase-init.js";
+    import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls } from "/common.js";
     import {
-      getFirestore, collection, query, orderBy, onSnapshot
+      collection, query, orderBy, onSnapshot, doc, collection as subcol,
+      runTransaction, serverTimestamp, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const db = getFirestore(app);
+    renderCurrentPlayerControls("you");
+
     const tablesCol = collection(db, "tables");
     const listEl = document.getElementById("tables");
 
-    const dollars = (cents) =>
-      `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`;
-
-    const renderCard = (d) => {
+    const renderTable = (id, d, seatsHtml) => {
       const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
       const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
       return `
         <div style="margin-top:12px;padding:14px;border:1px solid #334155;border-radius:12px;background:#111827">
-          <div style="font-weight:700">${d.name || "(no name)"}</div>
-          <div class="small">Blinds: ${blindStr}</div>
-          <div class="small">Buy-in: ${rangeStr}</div>
-          <div style="margin-top:8px;">
-            <button disabled title="Join flow coming soon" style="opacity:.6;cursor:not-allowed;padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;">Join (coming soon)</button>
+          <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
+            <div>
+              <div style="font-weight:700">${d.name || "(no name)"}</div>
+              <div class="small">Blinds: ${blindStr}</div>
+              <div class="small">Buy-in: ${rangeStr}</div>
+            </div>
+            <div>
+              <button class="join-btn" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;">Join</button>
+              <button class="leave-btn" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#ef4444;color:white;font-weight:700;">Leave</button>
+            </div>
+          </div>
+          <div class="small" style="margin-top:8px;">Seated:</div>
+          <div>${seatsHtml || "(none yet)"}</div>
+          <div class="join-panel" id="join-${id}" style="display:none;margin-top:10px;">
+            <div class="small">Choose your buy-in (min–max):</div>
+            <input id="amount-${id}" type="number" step="0.01" style="width:160px;padding:8px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb" />
+            <button class="confirm-join" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;">Confirm</button>
+            <span class="join-status small" id="status-${id}" style="margin-left:8px;"></span>
           </div>
         </div>
       `;
     };
 
-    const q = query(tablesCol, orderBy("createdAt", "desc"));
-    onSnapshot(q, (snap) => {
-      const rows = [];
+    // Fetch tables and wire seats listeners
+    const seatUnsubs = new Map();
+    onSnapshot(query(tablesCol, orderBy("createdAt", "desc")), (snap) => {
+      const blocks = [];
+      // unsubscribe previous seat listeners
+      seatUnsubs.forEach(unsub => unsub());
+      seatUnsubs.clear();
+
       snap.forEach(docSnap => {
+        const id = docSnap.id;
         const d = docSnap.data();
-        if (d.active) rows.push(renderCard(d));
+        if (!d.active) return;
+
+        // placeholder; will update once seats load
+        blocks.push({ id, html: renderTable(id, d, "Loading…"), data: d });
+
+        // live seats under each table
+        const seatsRef = subcol(doc(db, "tables", id), "seats");
+        const unsub = onSnapshot(seatsRef, (seatSnap) => {
+          const seated = [];
+          seatSnap.forEach(s => {
+            const sd = s.data();
+            seated.push(`<div style="display:flex;justify-content:space-between;"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
+          });
+          // re-render the specific block
+          const idx = blocks.findIndex(b => b.id === id);
+          if (idx >= 0) {
+            blocks[idx].html = renderTable(id, blocks[idx].data, seated.join("") || "(none yet)");
+            listEl.innerHTML = blocks.map(b => b.html).join("");
+          }
+        });
+        seatUnsubs.set(id, unsub);
       });
-      listEl.innerHTML = rows.length ? rows.join("") : "No active tables.";
+
+      listEl.innerHTML = blocks.length ? blocks.map(b => b.html).join("") : "No active tables.";
+    });
+
+    // Click handlers (join/leave)
+    document.addEventListener("click", async (e) => {
+      const joinBtn = e.target.closest(".join-btn");
+      const leaveBtn = e.target.closest(".leave-btn");
+      const confirmBtn = e.target.closest(".confirm-join");
+      const cp = getCurrentPlayer();
+
+      if (joinBtn) {
+        const id = joinBtn.getAttribute("data-id");
+        const panel = document.getElementById(`join-${id}`);
+        // prefill default from table
+        const tableSnap = await getDoc(doc(db, "tables", id));
+        const t = tableSnap.data();
+        const input = document.getElementById(`amount-${id}`);
+        input.value = (t?.defaultBuyInCents ? (t.defaultBuyInCents/100).toFixed(2) : "0.00");
+        panel.style.display = "block";
+        return;
+      }
+
+      if (confirmBtn) {
+        if (!cp) { alert("Select a Current Player first."); return; }
+        const tableId = confirmBtn.getAttribute("data-id");
+        const status = document.getElementById(`status-${tableId}`);
+        status.textContent = "Joining…";
+
+        try {
+          await runTransaction(db, async (tx) => {
+            const tableRef = doc(db, "tables", tableId);
+            const playerRef = doc(db, "players", cp.id);
+            const seatRef = doc(db, "tables", tableId, "seats", cp.id);
+
+            const [tableSnap, playerSnap, seatSnap] = await Promise.all([
+              tx.get(tableRef), tx.get(playerRef), tx.get(seatRef)
+            ]);
+            if (!tableSnap.exists()) throw new Error("Table not found.");
+            if (!playerSnap.exists()) throw new Error("Player not found.");
+
+            const t = tableSnap.data();
+            const p = playerSnap.data();
+            const amountCents = parseDollarsToCents(document.getElementById(`amount-${tableId}`).value);
+            if (amountCents === null) throw new Error("Enter a valid amount.");
+
+            if (amountCents < (t.minBuyInCents||0) || amountCents > (t.maxBuyInCents||0))
+              throw new Error("Amount must be between min and max buy-in.");
+            if ((p.walletCents||0) < amountCents)
+              throw new Error("Not enough wallet balance.");
+            if (seatSnap.exists())
+              throw new Error("You are already seated at this table.");
+
+            // deduct wallet, create seat
+            tx.update(playerRef, { walletCents: (p.walletCents||0) - amountCents });
+            tx.set(seatRef, {
+              playerId: cp.id,
+              playerName: cp.name || p.name || "",
+              chipStackCents: amountCents,
+              satAt: serverTimestamp(),
+              active: true
+            });
+          });
+          status.textContent = "Joined ✔";
+        } catch (err) {
+          status.textContent = "Error: " + (err?.message || err);
+        }
+        return;
+      }
+
+      if (leaveBtn) {
+        if (!cp) { alert("Select a Current Player first."); return; }
+        const tableId = leaveBtn.getAttribute("data-id");
+
+        const ok = confirm("Leave this table and return remaining chips to your wallet?");
+        if (!ok) return;
+
+        try {
+          await runTransaction(db, async (tx) => {
+            const playerRef = doc(db, "players", cp.id);
+            const seatRef = doc(db, "tables", tableId, "seats", cp.id);
+
+            const [playerSnap, seatSnap] = await Promise.all([tx.get(playerRef), tx.get(seatRef)]);
+            if (!seatSnap.exists()) throw new Error("You are not seated here.");
+
+            const p = playerSnap.data() || {};
+            const s = seatSnap.data();
+            const newWallet = (p.walletCents || 0) + (s.chipStackCents || 0);
+
+            tx.update(playerRef, { walletCents: newWallet });
+            tx.delete(seatRef);
+          });
+          alert("You left the table. Chips returned to wallet.");
+        } catch (err) {
+          alert("Error: " + (err?.message || err));
+        }
+        return;
+      }
     });
   </script>
 </body>
