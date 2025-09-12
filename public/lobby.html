@@ -48,11 +48,17 @@
       const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
       let banner;
       let potLine = "";
+      let stageLine = "";
+      let boardLine = "";
       let posLine = "";
       if (hand) {
         const vLabel = hand.variant === "omaha" ? "Omaha" : "Hold'em";
         banner = `Current Hand: ${vLabel} • Dealer: ${hand.dealerName || ""} • Status: ${hand.status}`;
         potLine = `<div class=\"small\">Pot: ${dollars(hand.potCents || 0)}</div>`;
+        const stageLabel = hand.stage ? hand.stage.charAt(0).toUpperCase() + hand.stage.slice(1) : "";
+        stageLine = `<div class=\"small\">Stage: ${stageLabel}</div>`;
+        const board = (hand.board || []).map(c => c.substring(0,5)).join(' ');
+        boardLine = `<div class=\"small\">Board: ${board}</div>`;
         const getName = (n) => seatMap?.find(s => s.seatNum === n)?.playerName || "(left)";
         const sbName = getName(hand.positions?.sbSeatNum);
         const bbName = getName(hand.positions?.bbSeatNum);
@@ -79,7 +85,7 @@
               <div class="small">Blinds: ${blindStr}</div>
               <div class="small">Buy-in: ${rangeStr}</div>
               <div class="small" style="margin-top:4px;">${banner}</div>
-              ${potLine}${posLine}
+              ${potLine}${stageLine}${boardLine}${posLine}
               <div class="small">${nextDealerLine}</div>
             </div>
             <div>
@@ -112,7 +118,8 @@
         if (b.hand) {
           const p = b.hand.positions || {};
           const contrib = b.hand.contributions ? JSON.stringify(b.hand.contributions) : '{}';
-          extra = `\npositions=${p.dealerSeatNum ?? 'null'},${p.sbSeatNum ?? 'null'},${p.bbSeatNum ?? 'null'}\ncontrib=${contrib}`;
+          const board = b.hand.board ? JSON.stringify(b.hand.board) : '[]';
+          extra = `\npositions=${p.dealerSeatNum ?? 'null'},${p.sbSeatNum ?? 'null'},${p.bbSeatNum ?? 'null'}\nstage=${b.hand.stage ?? 'null'}\nboard=${board}\ncontrib=${contrib}`;
         }
         el.textContent = `id=${b.id}\nseats=${b.seatCount}\ncurrentHandId=${b.data.currentHandId ?? 'null'}\nnextDealer=${ndName} (${ndId})\nnextVariantId=${b.data.nextVariantId ?? 'null'}${extra}`;
       } else {

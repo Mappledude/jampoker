@@ -106,17 +106,19 @@
         return;
       }
       if (handData.status === 'ended') {
-        handEl.textContent = 'Hand ended — waiting for next hand…';
+        handEl.textContent = handData.showdownPending ? 'Showdown pending — pot held' : 'Hand ended — waiting for next hand…';
         actionEl.style.display = 'none';
         return;
       }
       const h = handData;
       const vLabel = h.variant === 'omaha' ? 'Omaha' : "Hold'em";
+      const stageLabel = h.stage ? h.stage.charAt(0).toUpperCase() + h.stage.slice(1) : '';
       const getNameBySeat = (n) => seatData.find(s => s.seatNum === n)?.playerName || '(left)';
       const dealerName = h.dealerName || getNameBySeat(h.positions?.dealerSeatNum);
       const sbName = getNameBySeat(h.positions?.sbSeatNum);
       const bbName = getNameBySeat(h.positions?.bbSeatNum);
       const actorName = getNameBySeat(h.actorSeatNum);
+      const board = (h.board || []).map(c => `[ ${c} ]`).join(' ');
       let contrib = '';
       if (h.contributions) {
         const parts = [];
@@ -129,6 +131,8 @@
       handEl.innerHTML = `
         <div>Current Hand: ${vLabel} • Dealer: ${dealerName} • Status: ${h.status}</div>
         <div class="small" style="margin-top:4px;">Pot: ${dollars(h.potCents || 0)}</div>
+        <div class="small">Board: ${board || '(none)'}</div>
+        <div class="small">Stage: ${stageLabel}</div>
         <div class="small">Positions: Dealer ${dealerName}, SB ${sbName}, BB ${bbName}</div>
         ${contrib}
         <div class="small" style="margin-top:4px;">Action: ${actorName}</div>
@@ -195,7 +199,7 @@
       debugBox.style.display = 'block';
       const pos = handData?.positions || {};
       const folded = Object.keys(handData?.folded || {}).join(',');
-      debugBox.textContent = `id=${tableId}\ncurrentHandId=${tableData?.currentHandId ?? 'null'}\nnextDealerId=${tableData?.nextDealerId ?? 'null'}\nnextDealerName=${tableData?.nextDealerName ?? 'null'}\nnextVariantId=${tableData?.nextVariantId ?? 'null'}\npositions=${pos.dealerSeatNum ?? 'null'},${pos.sbSeatNum ?? 'null'},${pos.bbSeatNum ?? 'null'}\nactorSeatNum=${handData?.actorSeatNum ?? 'null'}\nlastAggressorSeatNum=${handData?.lastAggressorSeatNum ?? 'null'}\ntoCallCents=${handData?.toCallCents ?? 'null'}\nminRaiseCents=${handData?.minRaiseCents ?? 'null'}\nfolded=${folded}\nactiveSeatCount=${seatData.filter(s => s.active).length}`;
+      debugBox.textContent = `id=${tableId}\ncurrentHandId=${tableData?.currentHandId ?? 'null'}\nnextDealerId=${tableData?.nextDealerId ?? 'null'}\nnextDealerName=${tableData?.nextDealerName ?? 'null'}\nnextVariantId=${tableData?.nextVariantId ?? 'null'}\npositions=${pos.dealerSeatNum ?? 'null'},${pos.sbSeatNum ?? 'null'},${pos.bbSeatNum ?? 'null'}\nstage=${handData?.stage ?? 'null'}\nactorSeatNum=${handData?.actorSeatNum ?? 'null'}\nlastAggressorSeatNum=${handData?.lastAggressorSeatNum ?? 'null'}\nroundStartSeatNum=${handData?.roundStartSeatNum ?? 'null'}\ntoCallCents=${handData?.toCallCents ?? 'null'}\nminRaiseCents=${handData?.minRaiseCents ?? 'null'}\ndeckIndex=${handData?.deckIndex ?? 'null'}\nboard=${JSON.stringify(handData?.board || [])}\nfolded=${folded}\nactiveSeatCount=${seatData.filter(s => s.active).length}`;
     }
   </script>
 </body>
