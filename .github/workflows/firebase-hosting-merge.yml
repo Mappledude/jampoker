@@ -19,5 +19,5 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
       - name: Install Firebase CLI
         run: npm i -g firebase-tools
-      - name: Deploy Functions + Hosting
-        run: firebase deploy --only functions,hosting --project jam-poker --non-interactive --force
+      - name: Deploy Functions + Hosting + Rules
+        run: firebase deploy --only functions,hosting,firestore:rules --project jam-poker --non-interactive --force

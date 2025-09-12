@@ -2,7 +2,7 @@
 import { initializeApp } from "firebase-admin/app";
 import { getFirestore, FieldValue, DocumentReference, Transaction } from "firebase-admin/firestore";
 import { onRequest } from "firebase-functions/v2/https";
-import { onDocumentWritten, onDocumentUpdated } from "firebase-functions/v2/firestore";
+import { onDocumentWritten, onDocumentUpdated, onDocumentCreated } from "firebase-functions/v2/firestore";
 
 initializeApp();
 const db = getFirestore();
@@ -16,6 +16,7 @@ interface SeatInfo {
   playerId: string;
   playerName: string;
   seatNum: number;
+  chipStackCents: number;
 }
 
 async function getActiveSeats(tx: Transaction, tableRef: DocumentReference): Promise<SeatInfo[]> {
@@ -28,6 +29,7 @@ async function getActiveSeats(tx: Transaction, tableRef: DocumentReference): Pro
         playerId: s.id,
         playerName: d.playerName || "",
         seatNum: typeof d.seatNum === "number" ? d.seatNum : -1,
+        chipStackCents: typeof d.chipStackCents === "number" ? d.chipStackCents : 0,
       });
     }
   });
@@ -73,12 +75,12 @@ export const onSeatsChanged = onDocumentWritten(
     const tableRef = db.collection("tables").doc(tableId);
 
     await db.runTransaction(async (tx) => {
+      const seats = await getActiveSeats(tx, tableRef);
+
       const tableSnap = await tx.get(tableRef);
       if (!tableSnap.exists) return;
       const table = tableSnap.data() as any;
       if (!table.active) return;
-
-      const seats = await getActiveSeats(tx, tableRef);
       if (seats.length < 2) return;
       if (table.currentHandId) return;
 
@@ -104,6 +106,59 @@ export const onSeatsChanged = onDocumentWritten(
         nextDealerId: nextAfter,
         nextDealerName: nextName,
         nextVariantId: null,
+      });
+    });
+  }
+);
+
+// Trigger: hand created -> compute positions and post blinds
+export const onHandCreated = onDocumentCreated(
+  { region: "us-central1", document: "tables/{tableId}/hands/{handId}" },
+  async (event) => {
+    const tableId = event.params.tableId;
+    const handId = event.params.handId;
+    const tableRef = db.collection("tables").doc(tableId);
+    const handRef = tableRef.collection("hands").doc(handId);
+
+    await db.runTransaction(async (tx) => {
+      const [tableSnap, handSnap] = await Promise.all([
+        tx.get(tableRef),
+        tx.get(handRef),
+      ]);
+      if (!tableSnap.exists || !handSnap.exists) return;
+      const table = tableSnap.data() as any;
+      const hand = handSnap.data() as any;
+
+      const seats = await getActiveSeats(tx, tableRef);
+      if (seats.length < 2) return;
+
+      const dealerSeat = seats.find((s) => s.playerId === hand.dealerId);
+      if (!dealerSeat) return;
+      const sbSeat = seats[(dealerSeat.seatNum + 1) % seats.length];
+      const bbSeat = seats[(dealerSeat.seatNum + 2) % seats.length];
+
+      const sbAmount = Math.min(sbSeat.chipStackCents, table.smallBlindCents);
+      const bbAmount = Math.min(bbSeat.chipStackCents, table.bigBlindCents);
+
+      tx.update(tableRef.collection("seats").doc(sbSeat.playerId), {
+        chipStackCents: sbSeat.chipStackCents - sbAmount,
+      });
+      tx.update(tableRef.collection("seats").doc(bbSeat.playerId), {
+        chipStackCents: bbSeat.chipStackCents - bbAmount,
+      });
+
+      const contributions: Record<string, number> = {};
+      contributions[sbSeat.playerId] = sbAmount;
+      contributions[bbSeat.playerId] = bbAmount;
+
+      tx.update(handRef, {
+        positions: {
+          dealerSeatNum: dealerSeat.seatNum,
+          sbSeatNum: sbSeat.seatNum,
+          bbSeatNum: bbSeat.seatNum,
+        },
+        contributions,
+        potCents: sbAmount + bbAmount,
       });
     });
   }

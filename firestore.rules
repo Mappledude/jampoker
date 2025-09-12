@@ -16,7 +16,13 @@ service cloud.firestore {
 
       match /seats/{playerId} {
         allow read: if true;
-        allow write: if true;
+        allow create: if true;
+        allow delete: if true;
+        allow update: if
+          request.resource.data.chipStackCents == resource.data.chipStackCents &&
+          request.resource.data.playerId == resource.data.playerId &&
+          request.resource.data.playerName == resource.data.playerName &&
+          request.resource.data.seatNum == resource.data.seatNum;
       }
 
       match /hands/{handId} {
