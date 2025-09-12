@@ -7,7 +7,11 @@ service cloud.firestore {
       allow update: if !request.resource.data.keys().hasAny(['currentHandId']) &&
         (
           !request.resource.data.keys().hasAny(['nextVariantId']) ||
-          (request.auth != null && request.auth.uid == resource.data.nextDealerId)
+          (
+            request.resource.data.keys().hasOnly(['nextVariantId']) &&
+            (request.resource.data.nextVariantId == 'holdem' || request.resource.data.nextVariantId == 'omaha')
+            // TODO: require auth and match with nextDealerId when Firebase Auth is added
+          )
         );
 
       match /seats/{playerId} {
