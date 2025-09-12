@@ -20,4 +20,4 @@ jobs:
       - name: Install Firebase CLI
         run: npm i -g firebase-tools
       - name: Deploy Functions + Hosting
-        run: firebase deploy --only functions,hosting --project jam-poker --non-interactive
+        run: firebase deploy --only functions,hosting --project jam-poker --non-interactive --force
