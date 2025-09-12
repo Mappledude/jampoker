@@ -16,51 +16,49 @@
 
     <div class="card">
       <h1>Lobby</h1>
-      <p class="small">Live check from Firestore (collection <code>health</code> / doc <code>check</code>):</p>
-      <p id="health-status" class="small"></p>
-      <p id="health-time" class="small"></p>
+      <p class="small">Showing ACTIVE tables. (Join flow coming soon.)</p>
+      <div id="tables" class="small">Loading tables…</div>
     </div>
   </div>
 
-  <!-- Firebase init -->
   <script type="module" src="/firebase-init.js"></script>
-
-  <!-- Read from Firestore -->
   <script type="module">
     import { app } from "/firebase-init.js";
     import {
-      getFirestore,
-      doc,
-      getDoc
+      getFirestore, collection, query, orderBy, onSnapshot
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const db = getFirestore(app);
-    const statusEl = document.getElementById("health-status");
-    const timeEl = document.getElementById("health-time");
+    const tablesCol = collection(db, "tables");
+    const listEl = document.getElementById("tables");
 
-    (async () => {
-      statusEl.textContent = "Loading...";
-      try {
-        const ref = doc(db, "health", "check");
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          const data = snap.data();
-          statusEl.textContent = "Found note: " + (data.note || "(no note)");
-          const ts = data.now;
-          if (ts && typeof ts.toDate === "function") {
-            timeEl.textContent = "Last saved: " + ts.toDate().toLocaleString();
-          } else {
-            timeEl.textContent = "Last saved: (pending server time)";
-          }
-        } else {
-          statusEl.textContent = "No health/check doc yet.";
-          timeEl.textContent = "";
-        }
-      } catch (err) {
-        statusEl.textContent = "Error: " + (err?.message || err);
-        timeEl.textContent = "";
-      }
-    })();
+    const dollars = (cents) =>
+      `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`;
+
+    const renderCard = (d) => {
+      const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
+      const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
+      return `
+        <div style="margin-top:12px;padding:14px;border:1px solid #334155;border-radius:12px;background:#111827">
+          <div style="font-weight:700">${d.name || "(no name)"}</div>
+          <div class="small">Blinds: ${blindStr}</div>
+          <div class="small">Buy-in: ${rangeStr}</div>
+          <div style="margin-top:8px;">
+            <button disabled title="Join flow coming soon" style="opacity:.6;cursor:not-allowed;padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;">Join (coming soon)</button>
+          </div>
+        </div>
+      `;
+    };
+
+    const q = query(tablesCol, orderBy("createdAt", "desc"));
+    onSnapshot(q, (snap) => {
+      const rows = [];
+      snap.forEach(docSnap => {
+        const d = docSnap.data();
+        if (d.active) rows.push(renderCard(d));
+      });
+      listEl.innerHTML = rows.length ? rows.join("") : "No active tables.";
+    });
   </script>
 </body>
 </html>
