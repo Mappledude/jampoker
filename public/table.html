@@ -17,15 +17,16 @@
     <div id="error" class="card" style="display:none;"></div>
     <div id="table-info" class="card" style="margin-top:16px;"></div>
     <div id="current-hand" class="card" style="margin-top:16px;"></div>
+    <div id="action-panel" class="card" style="display:none;margin-top:16px;"></div>
     <div id="seats" class="card" style="margin-top:16px;"></div>
     <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
   </div>
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug } from "/common.js";
+    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer } from "/common.js";
     import {
-      doc, onSnapshot, collection, query, orderBy
+      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     renderCurrentPlayerControls("you");
@@ -38,6 +39,7 @@
     const errorEl = document.getElementById('error');
     const infoEl = document.getElementById('table-info');
     const handEl = document.getElementById('current-hand');
+    const actionEl = document.getElementById('action-panel');
     const seatsEl = document.getElementById('seats');
     const debugBox = document.getElementById('debug-box');
 
@@ -100,6 +102,12 @@
       if (!handData) {
         const seatCount = seatData.filter(s => s.active).length;
         handEl.innerHTML = seatCount < 2 ? 'Waiting for players…' : 'Waiting for next dealer’s choice…';
+        actionEl.style.display = 'none';
+        return;
+      }
+      if (handData.status === 'ended') {
+        handEl.textContent = 'Hand ended — waiting for next hand…';
+        actionEl.style.display = 'none';
         return;
       }
       const h = handData;
@@ -108,6 +116,7 @@
       const dealerName = h.dealerName || getNameBySeat(h.positions?.dealerSeatNum);
       const sbName = getNameBySeat(h.positions?.sbSeatNum);
       const bbName = getNameBySeat(h.positions?.bbSeatNum);
+      const actorName = getNameBySeat(h.actorSeatNum);
       let contrib = '';
       if (h.contributions) {
         const parts = [];
@@ -122,7 +131,9 @@
         <div class="small" style="margin-top:4px;">Pot: ${dollars(h.potCents || 0)}</div>
         <div class="small">Positions: Dealer ${dealerName}, SB ${sbName}, BB ${bbName}</div>
         ${contrib}
+        <div class="small" style="margin-top:4px;">Action: ${actorName}</div>
       `;
+      renderActions();
     }
 
     function renderSeats() {
@@ -130,11 +141,61 @@
       seatsEl.innerHTML = `<h2 style="margin-top:0;">Seats</h2>${rows.join('') || '<div class="small">(none yet)</div>'}`;
     }
 
+    let intentPending = false;
+    async function renderActions() {
+      const current = getCurrentPlayer();
+      if (!handData || !current) { actionEl.style.display = 'none'; return; }
+      const folded = handData.folded || {};
+      const currentSeat = seatData.find(s => s.playerId === current.id);
+      const isActor = currentSeat && currentSeat.seatNum === handData.actorSeatNum && !folded[current.id] && (currentSeat.chipStackCents > 0);
+      if (!isActor) { actionEl.style.display = 'none'; return; }
+
+      const toCall = handData.toCallCents || 0;
+      const minRaise = handData.minRaiseCents || 0;
+      const callLabel = toCall > 0 ? `Call ${dollars(toCall)}` : 'Check';
+      const raiseLabel = `Min-Raise ${dollars(minRaise)}`;
+
+      actionEl.style.display = 'block';
+      actionEl.innerHTML = `
+        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+          <button id="btn-fold">Fold</button>
+          <button id="btn-call">${callLabel}</button>
+          <button id="btn-raise">${raiseLabel}</button>
+        </div>
+      `;
+
+      const foldBtn = document.getElementById('btn-fold');
+      const callBtn = document.getElementById('btn-call');
+      const raiseBtn = document.getElementById('btn-raise');
+
+      const disable = (d) => { foldBtn.disabled = callBtn.disabled = raiseBtn.disabled = d; };
+
+      const intentsCol = collection(db, 'tables', tableId, 'hands', tableData.currentHandId, 'intents');
+
+      const send = async (data) => {
+        if (intentPending) return;
+        intentPending = true;
+        disable(true);
+        try {
+          await addDoc(intentsCol, { ...data, createdAt: serverTimestamp() });
+        } catch (e) {
+          console.error(e);
+        }
+        intentPending = false;
+        disable(false);
+      };
+
+      foldBtn.addEventListener('click', () => send({ playerId: current.id, type: 'fold' }));
+      callBtn.addEventListener('click', () => send({ playerId: current.id, type: toCall > 0 ? 'call' : 'check' }));
+      raiseBtn.addEventListener('click', () => send({ playerId: current.id, type: 'raise', amountCents: minRaise }));
+    }
+
     function updateDebug() {
       if (!isDebug()) { debugBox.style.display = 'none'; return; }
       debugBox.style.display = 'block';
       const pos = handData?.positions || {};
-      debugBox.textContent = `id=${tableId}\ncurrentHandId=${tableData?.currentHandId ?? 'null'}\nnextDealerId=${tableData?.nextDealerId ?? 'null'}\nnextDealerName=${tableData?.nextDealerName ?? 'null'}\nnextVariantId=${tableData?.nextVariantId ?? 'null'}\npositions=${pos.dealerSeatNum ?? 'null'},${pos.sbSeatNum ?? 'null'},${pos.bbSeatNum ?? 'null'}\nactiveSeatCount=${seatData.filter(s => s.active).length}`;
+      const folded = Object.keys(handData?.folded || {}).join(',');
+      debugBox.textContent = `id=${tableId}\ncurrentHandId=${tableData?.currentHandId ?? 'null'}\nnextDealerId=${tableData?.nextDealerId ?? 'null'}\nnextDealerName=${tableData?.nextDealerName ?? 'null'}\nnextVariantId=${tableData?.nextVariantId ?? 'null'}\npositions=${pos.dealerSeatNum ?? 'null'},${pos.sbSeatNum ?? 'null'},${pos.bbSeatNum ?? 'null'}\nactorSeatNum=${handData?.actorSeatNum ?? 'null'}\nlastAggressorSeatNum=${handData?.lastAggressorSeatNum ?? 'null'}\ntoCallCents=${handData?.toCallCents ?? 'null'}\nminRaiseCents=${handData?.minRaiseCents ?? 'null'}\nfolded=${folded}\nactiveSeatCount=${seatData.filter(s => s.active).length}`;
     }
   </script>
 </body>
