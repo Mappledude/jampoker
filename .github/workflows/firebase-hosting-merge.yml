@@ -1,22 +1,23 @@
-name: Deploy to Firebase on merge
+name: Deploy Firebase (Functions + Hosting) on merge
 on:
   push:
-    branches:
-      - main
+    branches: [ main ]
 jobs:
-  build_and_deploy:
+  deploy:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write   # needed for google-github-actions/auth
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
-      - run: npm --prefix functions install
-      - run: npm --prefix functions run build
-      - run: npm install -g firebase-tools
-      - run: |
-          echo "$FIREBASE_SERVICE_ACCOUNT_JAM_POKER" > "$HOME/service-account.json"
-          firebase deploy --only hosting,functions --project jam-poker --non-interactive
-        env:
-          FIREBASE_SERVICE_ACCOUNT_JAM_POKER: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
-          GOOGLE_APPLICATION_CREDENTIALS: $HOME/service-account.json
+          node-version: "20"
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
+      - name: Install Firebase CLI
+        run: npm i -g firebase-tools
+      - name: Deploy Functions + Hosting
+        run: firebase deploy --only functions,hosting --project jam-poker --non-interactive
