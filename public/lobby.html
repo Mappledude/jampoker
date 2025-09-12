@@ -28,17 +28,37 @@
     import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls } from "/common.js";
     import {
       collection, query, orderBy, onSnapshot, doc, collection as subcol,
-      runTransaction, serverTimestamp, getDoc
+      runTransaction, serverTimestamp, getDoc, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     renderCurrentPlayerControls("you");
 
     const tablesCol = collection(db, "tables");
     const listEl = document.getElementById("tables");
+    let blocks = [];
+    const seatUnsubs = new Map();
+    const handUnsubs = new Map();
 
-    const renderTable = (id, d, seatsHtml) => {
+    const renderTable = (id, d, seatsHtml, seatCount, hand) => {
       const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
       const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
+      let banner;
+      if (hand) {
+        const vLabel = hand.variant === "omaha" ? "Omaha" : "Hold'em";
+        banner = `Current Hand: ${vLabel} • Dealer: ${hand.dealerName || ""} • Status: ${hand.status}`;
+      } else {
+        banner = seatCount < 2 ? "Waiting for players…" : "Waiting for next dealer’s choice…";
+      }
+      const cp = getCurrentPlayer();
+      let variantHtml = "";
+      if (cp && cp.id === d.nextDealerId) {
+        const selVal = d.nextVariantId || "holdem";
+        variantHtml = ` <select class="variant-select" data-id="${id}">
+          <option value="holdem" ${selVal === 'holdem' ? 'selected' : ''}>Hold'em</option>
+          <option value="omaha" ${selVal === 'omaha' ? 'selected' : ''}>Omaha</option>
+        </select>`;
+      }
+      const nextDealerLine = `Next Dealer: ${d.nextDealerName || "(TBD)"}${variantHtml}`;
       return `
         <div style="margin-top:12px;padding:14px;border:1px solid #334155;border-radius:12px;background:#111827">
           <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
@@ -46,6 +66,8 @@
               <div style="font-weight:700">${d.name || "(no name)"}</div>
               <div class="small">Blinds: ${blindStr}</div>
               <div class="small">Buy-in: ${rangeStr}</div>
+              <div class="small" style="margin-top:4px;">${banner}</div>
+              <div class="small">${nextDealerLine}</div>
             </div>
             <div>
               <button class="join-btn" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;">Join</button>
@@ -64,41 +86,66 @@
       `;
     };
 
-    // Fetch tables and wire seats listeners
-    const seatUnsubs = new Map();
+    const renderAll = () => {
+      listEl.innerHTML = blocks.length ? blocks.map(b => renderTable(b.id, b.data, b.seatsHtml, b.seatCount, b.hand)).join("") : "No active tables.";
+    };
+
     onSnapshot(query(tablesCol, orderBy("createdAt", "desc")), (snap) => {
-      const blocks = [];
-      // unsubscribe previous seat listeners
-      seatUnsubs.forEach(unsub => unsub());
+      blocks = [];
+      seatUnsubs.forEach(u => u());
       seatUnsubs.clear();
+      handUnsubs.forEach(u => u());
+      handUnsubs.clear();
 
       snap.forEach(docSnap => {
         const id = docSnap.id;
         const d = docSnap.data();
         if (!d.active) return;
-
-        // placeholder; will update once seats load
-        blocks.push({ id, html: renderTable(id, d, "Loading…"), data: d });
-
-        // live seats under each table
+        blocks.push({ id, data: d, seatsHtml: "Loading…", seatCount: 0, hand: null });
         const seatsRef = subcol(doc(db, "tables", id), "seats");
-        const unsub = onSnapshot(seatsRef, (seatSnap) => {
+        const unsubSeats = onSnapshot(seatsRef, (seatSnap) => {
           const seated = [];
           seatSnap.forEach(s => {
             const sd = s.data();
-            seated.push(`<div style="display:flex;justify-content:space-between;"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
+            seated.push(`<div style=\"display:flex;justify-content:space-between;\"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
           });
-          // re-render the specific block
           const idx = blocks.findIndex(b => b.id === id);
           if (idx >= 0) {
-            blocks[idx].html = renderTable(id, blocks[idx].data, seated.join("") || "(none yet)");
-            listEl.innerHTML = blocks.map(b => b.html).join("");
+            blocks[idx].seatsHtml = seated.join("") || "(none yet)";
+            blocks[idx].seatCount = seatSnap.size;
+            renderAll();
           }
         });
-        seatUnsubs.set(id, unsub);
+        seatUnsubs.set(id, unsubSeats);
+
+        if (d.currentHandId) {
+          const handRef = doc(db, "tables", id, "hands", d.currentHandId);
+          const unsubHand = onSnapshot(handRef, (handSnap) => {
+            const idx = blocks.findIndex(b => b.id === id);
+            if (idx >= 0) {
+              blocks[idx].hand = handSnap.data();
+              renderAll();
+            }
+          });
+          handUnsubs.set(id, unsubHand);
+        }
       });
 
-      listEl.innerHTML = blocks.length ? blocks.map(b => b.html).join("") : "No active tables.";
+      renderAll();
+    });
+
+    // re-render when current player changes
+    document.addEventListener('change', (e) => {
+      if (e.target.id === 'cp-select') renderAll();
+    });
+
+    document.addEventListener('change', async (e) => {
+      const sel = e.target.closest('.variant-select');
+      if (sel) {
+        const tableId = sel.getAttribute('data-id');
+        try { await updateDoc(doc(db, 'tables', tableId), { nextVariantId: sel.value }); }
+        catch (err) { console.error(err); }
+      }
     });
 
     // Click handlers (join/leave)
