@@ -12,6 +12,7 @@
       <a href="/">Home</a>
       <a href="/lobby.html">Lobby</a>
       <a href="/admin.html">Admin</a>
+      <span id="debug-chip" class="small" style="margin-left:auto;cursor:pointer;padding:4px 8px;border:1px solid #334155;border-radius:8px;">Debug: OFF</span>
     </nav>
 
     <div id="you"></div>
@@ -25,13 +26,16 @@
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls } from "/common.js";
+    import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls, isDebug, setDebug } from "/common.js";
     import {
       collection, query, orderBy, onSnapshot, doc, collection as subcol,
       runTransaction, serverTimestamp, getDoc, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     renderCurrentPlayerControls("you");
+    const debugChip = document.getElementById('debug-chip');
+    debugChip.textContent = isDebug() ? 'Debug: ON' : 'Debug: OFF';
+    debugChip.addEventListener('click', () => setDebug(!isDebug()));
 
     const tablesCol = collection(db, "tables");
     const listEl = document.getElementById("tables");
@@ -82,12 +86,27 @@
             <button class="confirm-join" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;">Confirm</button>
             <span class="join-status small" id="status-${id}" style="margin-left:8px;"></span>
           </div>
+          <div class="dbg" id="dbg-${id}" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:4px;"></div>
         </div>
       `;
     };
 
+    const updateDebug = (b) => {
+      const el = document.getElementById(`dbg-${b.id}`);
+      if (!el) return;
+      if (isDebug()) {
+        el.style.display = 'block';
+        const ndName = b.data.nextDealerName ?? 'null';
+        const ndId = b.data.nextDealerId ?? 'null';
+        el.textContent = `id=${b.id}\nseats=${b.seatCount}\ncurrentHandId=${b.data.currentHandId ?? 'null'}\nnextDealer=${ndName} (${ndId})\nnextVariantId=${b.data.nextVariantId ?? 'null'}`;
+      } else {
+        el.style.display = 'none';
+      }
+    };
+
     const renderAll = () => {
       listEl.innerHTML = blocks.length ? blocks.map(b => renderTable(b.id, b.data, b.seatsHtml, b.seatCount, b.hand)).join("") : "No active tables.";
+      blocks.forEach(updateDebug);
     };
 
     onSnapshot(query(tablesCol, orderBy("createdAt", "desc")), (snap) => {
@@ -105,14 +124,18 @@
         const seatsRef = subcol(doc(db, "tables", id), "seats");
         const unsubSeats = onSnapshot(seatsRef, (seatSnap) => {
           const seated = [];
+          let activeCount = 0;
           seatSnap.forEach(s => {
             const sd = s.data();
-            seated.push(`<div style=\"display:flex;justify-content:space-between;\"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
+            if (sd.active !== false) {
+              seated.push(`<div style=\"display:flex;justify-content:space-between;\"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
+              activeCount++;
+            }
           });
           const idx = blocks.findIndex(b => b.id === id);
           if (idx >= 0) {
             blocks[idx].seatsHtml = seated.join("") || "(none yet)";
-            blocks[idx].seatCount = seatSnap.size;
+            blocks[idx].seatCount = activeCount;
             renderAll();
           }
         });

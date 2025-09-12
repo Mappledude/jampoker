@@ -99,3 +99,17 @@ export function renderCurrentPlayerControls(containerId) {
   }
 }
 
+export const isDebug = () => {
+  const params = new URLSearchParams(window.location.search);
+  return params.get('debug') === '1' || localStorage.getItem('debug') === '1';
+};
+
+export const setDebug = (on) => {
+  localStorage.setItem('debug', on ? '1' : '0');
+  const url = new URL(window.location.href);
+  if (on) url.searchParams.set('debug', '1');
+  else url.searchParams.delete('debug');
+  window.location.href = url.toString();
+};
+
+
