@@ -1,0 +1,141 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Table</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div class="wrap">
+    <nav class="nav">
+      <span style="font-weight:700;">JamPoker</span>
+      <a href="/lobby.html">Lobby</a>
+      <span id="debug-chip" class="small" style="margin-left:auto;cursor:pointer;padding:4px 8px;border:1px solid #334155;border-radius:8px;">Debug: OFF</span>
+    </nav>
+    <div id="you"></div>
+    <div id="error" class="card" style="display:none;"></div>
+    <div id="table-info" class="card" style="margin-top:16px;"></div>
+    <div id="current-hand" class="card" style="margin-top:16px;"></div>
+    <div id="seats" class="card" style="margin-top:16px;"></div>
+    <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
+  </div>
+
+  <script type="module" src="/firebase-init.js"></script>
+  <script type="module">
+    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug } from "/common.js";
+    import {
+      doc, onSnapshot, collection, query, orderBy
+    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+
+    renderCurrentPlayerControls("you");
+    const debugChip = document.getElementById('debug-chip');
+    debugChip.textContent = isDebug() ? 'Debug: ON' : 'Debug: OFF';
+    debugChip.addEventListener('click', () => setDebug(!isDebug()));
+
+    const params = new URLSearchParams(window.location.search);
+    const tableId = params.get('id');
+    const errorEl = document.getElementById('error');
+    const infoEl = document.getElementById('table-info');
+    const handEl = document.getElementById('current-hand');
+    const seatsEl = document.getElementById('seats');
+    const debugBox = document.getElementById('debug-box');
+
+    let tableData = null;
+    let handData = null;
+    let seatData = [];
+    let unsubHand = null;
+
+    if (!tableId) {
+      errorEl.style.display = 'block';
+      errorEl.innerHTML = '<h1>Table not found</h1><a href="/lobby.html">Back to Lobby</a>';
+    } else {
+      const tableRef = doc(db, 'tables', tableId);
+      onSnapshot(tableRef, (snap) => {
+        if (!snap.exists()) {
+          errorEl.style.display = 'block';
+          errorEl.innerHTML = '<h1>Table not found</h1><a href="/lobby.html">Back to Lobby</a>';
+          return;
+        }
+        tableData = { id: snap.id, ...snap.data() };
+        renderTableInfo();
+        if (unsubHand) unsubHand();
+        if (tableData.currentHandId) {
+          const handRef = doc(db, 'tables', tableId, 'hands', tableData.currentHandId);
+          unsubHand = onSnapshot(handRef, (hsnap) => {
+            handData = hsnap.exists() ? hsnap.data() : null;
+            renderHand();
+            updateDebug();
+          });
+        } else {
+          handData = null;
+          renderHand();
+          updateDebug();
+        }
+        updateDebug();
+      });
+
+      const seatsRef = collection(db, 'tables', tableId, 'seats');
+      onSnapshot(query(seatsRef, orderBy('seatNum', 'asc')), (snap) => {
+        seatData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        renderSeats();
+        renderHand();
+        updateDebug();
+      });
+    }
+
+    function renderTableInfo() {
+      if (!tableData) { infoEl.textContent = ''; return; }
+      const t = tableData;
+      const blindStr = `${dollars(t.smallBlindCents || 0)}/${dollars(t.bigBlindCents || 0)}`;
+      const rangeStr = `${dollars(t.minBuyInCents || 0)}–${dollars(t.maxBuyInCents || 0)} (default ${dollars(t.defaultBuyInCents || 0)})`;
+      infoEl.innerHTML = `
+        <h1>${t.name || '(no name)'}</h1>
+        <div class="small">Blinds: ${blindStr}</div>
+        <div class="small">Buy-in: ${rangeStr}</div>
+      `;
+    }
+
+    function renderHand() {
+      if (!handData) {
+        const seatCount = seatData.filter(s => s.active).length;
+        handEl.innerHTML = seatCount < 2 ? 'Waiting for players…' : 'Waiting for next dealer’s choice…';
+        return;
+      }
+      const h = handData;
+      const vLabel = h.variant === 'omaha' ? 'Omaha' : "Hold'em";
+      const getNameBySeat = (n) => seatData.find(s => s.seatNum === n)?.playerName || '(left)';
+      const dealerName = h.dealerName || getNameBySeat(h.positions?.dealerSeatNum);
+      const sbName = getNameBySeat(h.positions?.sbSeatNum);
+      const bbName = getNameBySeat(h.positions?.bbSeatNum);
+      let contrib = '';
+      if (h.contributions) {
+        const parts = [];
+        for (const [pid, cents] of Object.entries(h.contributions)) {
+          const name = seatData.find(s => s.playerId === pid)?.playerName || '(left)';
+          parts.push(`${name}: ${dollars(cents)}`);
+        }
+        if (parts.length) contrib = `<div class="small">${parts.join(', ')}</div>`;
+      }
+      handEl.innerHTML = `
+        <div>Current Hand: ${vLabel} • Dealer: ${dealerName} • Status: ${h.status}</div>
+        <div class="small" style="margin-top:4px;">Pot: ${dollars(h.potCents || 0)}</div>
+        <div class="small">Positions: Dealer ${dealerName}, SB ${sbName}, BB ${bbName}</div>
+        ${contrib}
+      `;
+    }
+
+    function renderSeats() {
+      const rows = seatData.map(s => `<div>${s.playerName || '(no name)'} • ${dollars(s.chipStackCents || 0)}</div>`);
+      seatsEl.innerHTML = `<h2 style="margin-top:0;">Seats</h2>${rows.join('') || '<div class="small">(none yet)</div>'}`;
+    }
+
+    function updateDebug() {
+      if (!isDebug()) { debugBox.style.display = 'none'; return; }
+      debugBox.style.display = 'block';
+      const pos = handData?.positions || {};
+      debugBox.textContent = `id=${tableId}\ncurrentHandId=${tableData?.currentHandId ?? 'null'}\nnextDealerId=${tableData?.nextDealerId ?? 'null'}\nnextDealerName=${tableData?.nextDealerName ?? 'null'}\nnextVariantId=${tableData?.nextVariantId ?? 'null'}\npositions=${pos.dealerSeatNum ?? 'null'},${pos.sbSeatNum ?? 'null'},${pos.bbSeatNum ?? 'null'}\nactiveSeatCount=${seatData.filter(s => s.active).length}`;
+    }
+  </script>
+</body>
+</html>
