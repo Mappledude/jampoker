@@ -14,6 +14,7 @@
       <a href="/admin.html">Admin</a>
     </nav>
 
+    <!-- PLAYERS (kept from previous briefs) -->
     <div class="card">
       <h1>Admin — Players</h1>
       <p class="small">Add a player. Each new player starts with $1,000.00 (walletCents = 100000).</p>
@@ -31,12 +32,47 @@
       <h2 style="margin-top:0;">Players</h2>
       <div id="players-list" class="small">Loading players…</div>
     </div>
+
+    <!-- TABLES (new) -->
+    <div class="card" style="margin-top:16px;">
+      <h1 style="margin-top:0;">Admin — Tables</h1>
+      <p class="small">Create a table with defaults. Fields are in dollars; we’ll store cents in Firestore.</p>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0;">
+        <input id="table-name" placeholder="Table name (e.g., Family Table)" style="padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb;grid-column:1/-1" />
+
+        <label class="small">Min buy-in ($)
+          <input id="min-buyin" type="number" step="0.01" value="10.00" style="width:100%;padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb">
+        </label>
+        <label class="small">Default buy-in ($)
+          <input id="default-buyin" type="number" step="0.01" value="10.00" style="width:100%;padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb">
+        </label>
+        <label class="small">Max buy-in ($)
+          <input id="max-buyin" type="number" step="0.01" value="20.00" style="width:100%;padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb">
+        </label>
+        <div></div>
+        <label class="small">Small blind ($)
+          <input id="sb" type="number" step="0.01" value="0.25" style="width:100%;padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb">
+        </label>
+        <label class="small">Big blind ($)
+          <input id="bb" type="number" step="0.01" value="0.50" style="width:100%;padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb">
+        </label>
+      </div>
+
+      <button id="create-table" style="padding:10px 14px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;cursor:pointer">Create Table</button>
+      <p id="table-status" class="small" style="min-height:1.2em;"></p>
+    </div>
+
+    <div class="card" style="margin-top:16px;">
+      <h2 style="margin-top:0;">Tables</h2>
+      <div id="tables-list" class="small">Loading tables…</div>
+    </div>
   </div>
 
   <!-- Firebase init -->
   <script type="module" src="/firebase-init.js"></script>
 
-  <!-- Firestore: create + list + edit wallet + delete -->
+  <!-- Firestore logic for Players + Tables -->
   <script type="module">
     import { app } from "/firebase-init.js";
     import {
@@ -45,44 +81,34 @@
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     const db = getFirestore(app);
-    const playersCol = collection(db, "players");
 
-    // --- helpers ---
+    // ---------- helpers ----------
     const dollars = (cents) =>
       `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`;
-
     const parseDollarsToCents = (input) => {
-      // remove $ , spaces
       const clean = String(input).replace(/[^0-9.]/g, "");
       if (!clean) return null;
       const value = Number(clean);
       if (Number.isNaN(value)) return null;
-      // round to cents
       return Math.max(0, Math.round(value * 100));
     };
 
-    // --- add player ---
+    // ---------- PLAYERS (add/list/edit/delete) ----------
+    const playersCol = collection(db, "players");
     const addBtn = document.getElementById("add-player");
     const nameInput = document.getElementById("player-name");
     const statusEl = document.getElementById("add-status");
+    const listEl = document.getElementById("players-list");
 
-    addBtn.addEventListener("click", async () => {
+    addBtn?.addEventListener("click", async () => {
       const name = (nameInput.value || "").trim();
-      if (!name) {
-        statusEl.textContent = "Please enter a name.";
-        return;
-      }
+      if (!name) { statusEl.textContent = "Please enter a name."; return; }
       statusEl.textContent = "Saving…";
       addBtn.disabled = true;
       try {
-        await addDoc(playersCol, {
-          name,
-          walletCents: 100000, // $1,000.00
-          createdAt: serverTimestamp()
-        });
+        await addDoc(playersCol, { name, walletCents: 100000, createdAt: serverTimestamp() });
         statusEl.textContent = "Player added ✔";
-        nameInput.value = "";
-        nameInput.focus();
+        nameInput.value = ""; nameInput.focus();
       } catch (err) {
         statusEl.textContent = "Error: " + (err?.message || err);
       } finally {
@@ -90,14 +116,11 @@
       }
     });
 
-    // --- live list with edit + delete ---
-    const listEl = document.getElementById("players-list");
-
-    const renderRow = (id, d) => {
+    const renderPlayerRow = (id, d) => {
       const name = d.name || "(no name)";
       const wallet = typeof d.walletCents === "number" ? dollars(d.walletCents) : "$0.00";
       return `
-        <div class="row" data-id="${id}" style="display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 0;border-bottom:1px solid #334155">
+        <div class="row" data-type="player" data-id="${id}" style="display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 0;border-bottom:1px solid #334155">
           <div>
             <div style="font-weight:600">${name}</div>
             <div class="small">ID: <code>${id}</code></div>
@@ -112,47 +135,132 @@
       `;
     };
 
-    const q = query(playersCol, orderBy("createdAt", "desc"));
-    onSnapshot(q, (snap) => {
-      if (snap.empty) {
-        listEl.textContent = "No players yet.";
-        return;
-      }
+    const playersQ = query(playersCol, orderBy("createdAt", "desc"));
+    onSnapshot(playersQ, (snap) => {
+      if (!listEl) return;
+      if (snap.empty) { listEl.textContent = "No players yet."; return; }
       const rows = [];
-      snap.forEach(docSnap => rows.push(renderRow(docSnap.id, docSnap.data())));
+      snap.forEach(docSnap => rows.push(renderPlayerRow(docSnap.id, docSnap.data())));
       listEl.innerHTML = rows.join("");
     });
 
-    // event delegation for Save/Delete
-    listEl.addEventListener("click", async (e) => {
+    listEl?.addEventListener("click", async (e) => {
       const row = e.target.closest(".row");
-      if (!row) return;
+      if (!row || row.getAttribute("data-type") !== "player") return;
       const id = row.getAttribute("data-id");
       const status = row.querySelector(".row-status");
 
       if (e.target.classList.contains("save-btn")) {
         const input = row.querySelector(".wallet-input");
         const cents = parseDollarsToCents(input.value);
-        if (cents === null) {
-          status.textContent = "Enter a valid dollar amount (e.g., 25 or 25.50).";
-          return;
-        }
+        if (cents === null) { status.textContent = "Enter a valid dollar amount."; return; }
         status.textContent = "Saving…";
-        try {
-          await updateDoc(doc(db, "players", id), { walletCents: cents });
-          status.textContent = "Updated ✔";
-        } catch (err) {
-          status.textContent = "Error: " + (err?.message || err);
-        }
+        try { await updateDoc(doc(db, "players", id), { walletCents: cents }); status.textContent = "Updated ✔"; }
+        catch (err) { status.textContent = "Error: " + (err?.message || err); }
       }
 
       if (e.target.classList.contains("delete-btn")) {
-        const ok = confirm("Delete this player? This cannot be undone.");
-        if (!ok) return;
+        const ok = confirm("Delete this player? This cannot be undone."); if (!ok) return;
         status.textContent = "Deleting…";
+        try { await deleteDoc(doc(db, "players", id)); }
+        catch (err) { status.textContent = "Error: " + (err?.message || err); }
+      }
+    });
+
+    // ---------- TABLES (create/list + archive toggle) ----------
+    const tablesCol = collection(db, "tables");
+    const tName = document.getElementById("table-name");
+    const tMin = document.getElementById("min-buyin");
+    const tDef = document.getElementById("default-buyin");
+    const tMax = document.getElementById("max-buyin");
+    const tSB  = document.getElementById("sb");
+    const tBB  = document.getElementById("bb");
+    const tBtn = document.getElementById("create-table");
+    const tStatus = document.getElementById("table-status");
+    const tList = document.getElementById("tables-list");
+
+    const renderTableRow = (id, d) => {
+      const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
+      const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
+      const active = d.active ? "Active" : "Archived";
+      const toggleLabel = d.active ? "Archive" : "Activate";
+      return `
+        <div class="row" data-type="table" data-id="${id}" style="display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 0;border-bottom:1px solid #334155">
+          <div>
+            <div style="font-weight:600">${d.name || "(no name)"}</div>
+            <div class="small">Blinds: ${blindStr}</div>
+            <div class="small">Buy-in: ${rangeStr}</div>
+            <div class="small">Status: ${active} • ID: <code>${id}</code></div>
+          </div>
+          <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end">
+            <button class="toggle-active-btn" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;cursor:pointer">${toggleLabel}</button>
+          </div>
+          <div class="row-status small" style="grid-column:1 / -1; min-height:1em;"></div>
+        </div>
+      `;
+    };
+
+    tBtn?.addEventListener("click", async () => {
+      const name = (tName.value || "").trim();
+      const minC = parseDollarsToCents(tMin.value);
+      const defC = parseDollarsToCents(tDef.value);
+      const maxC = parseDollarsToCents(tMax.value);
+      const sbC  = parseDollarsToCents(tSB.value);
+      const bbC  = parseDollarsToCents(tBB.value);
+
+      const err = (msg) => { tStatus.textContent = msg; return false; };
+
+      if (!name) return err("Please enter a table name.");
+      if ([minC, defC, maxC, sbC, bbC].some(v => v === null)) return err("Enter valid numbers for all fields.");
+      if (minC > maxC) return err("Min buy-in cannot be greater than max.");
+      if (defC < minC || defC > maxC) return err("Default buy-in must be between min and max.");
+      if (sbC <= 0 || bbC <= 0) return err("Blinds must be greater than zero.");
+
+      tStatus.textContent = "Creating…";
+      tBtn.disabled = true;
+      try {
+        await addDoc(tablesCol, {
+          name,
+          minBuyInCents: minC,
+          maxBuyInCents: maxC,
+          defaultBuyInCents: defC,
+          smallBlindCents: sbC,
+          bigBlindCents: bbC,
+          active: true,
+          createdAt: serverTimestamp()
+        });
+        tStatus.textContent = "Table created ✔";
+        tName.value = "";
+      } catch (e) {
+        tStatus.textContent = "Error: " + (e?.message || e);
+      } finally {
+        tBtn.disabled = false;
+      }
+    });
+
+    const tablesQ = query(tablesCol, orderBy("createdAt", "desc"));
+    onSnapshot(tablesQ, (snap) => {
+      if (!tList) return;
+      if (snap.empty) { tList.textContent = "No tables yet."; return; }
+      const rows = [];
+      snap.forEach(docSnap => rows.push(renderTableRow(docSnap.id, docSnap.data())));
+      tList.innerHTML = rows.join("");
+    });
+
+    // toggle active/archive
+    document.addEventListener("click", async (e) => {
+      const row = e.target.closest(".row");
+      if (!row || row.getAttribute("data-type") !== "table") return;
+      const id = row.getAttribute("data-id");
+      const status = row.querySelector(".row-status");
+
+      if (e.target.classList.contains("toggle-active-btn")) {
+        status.textContent = "Updating…";
         try {
-          await deleteDoc(doc(db, "players", id));
-          // onSnapshot will re-render automatically
+          // read current label to infer new state
+          const toArchive = e.target.textContent.includes("Archive");
+          await updateDoc(doc(db, "tables", id), { active: !toArchive });
+          status.textContent = "Updated ✔";
         } catch (err) {
           status.textContent = "Error: " + (err?.message || err);
         }
