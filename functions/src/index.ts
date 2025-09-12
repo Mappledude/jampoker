@@ -60,6 +60,38 @@ function rotateDealer(seats: SeatInfo[], currentDealerId: string): string {
   return seats[(idx + 1) % seats.length].playerId;
 }
 
+function nextSeat(
+  seats: SeatInfo[],
+  startSeatNum: number,
+  folded: Record<string, true>
+): number {
+  const count = seats.length;
+  for (let i = 1; i <= count; i++) {
+    const seat = seats[(startSeatNum + i) % count];
+    if (!seat) continue;
+    if (folded[seat.playerId]) continue;
+    if (seat.chipStackCents <= 0) continue;
+    return seat.seatNum;
+  }
+  return startSeatNum;
+}
+
+function highestContribution(contrib: Record<string, number> = {}): number {
+  return Object.values(contrib).reduce((m, v) => (v > m ? v : m), 0);
+}
+
+function toCallFor(contrib: Record<string, number>, playerId: string): number {
+  const highest = highestContribution(contrib);
+  const cur = contrib[playerId] || 0;
+  return Math.max(0, highest - cur);
+}
+
+function minRaiseFrom(hand: any, bb: number): number {
+  return hand.lastAggressorSeatNum != null && typeof hand.minRaiseCents === "number"
+    ? hand.minRaiseCents
+    : bb;
+}
+
 async function createHandTx(tx: Transaction, tableRef: DocumentReference, data: any) {
   const handRef = tableRef.collection("hands").doc();
   tx.set(handRef, data);
@@ -159,7 +191,178 @@ export const onHandCreated = onDocumentCreated(
         },
         contributions,
         potCents: sbAmount + bbAmount,
+        stage: "preflop",
+        lastAggressorSeatNum: bbSeat.seatNum,
+        actorSeatNum:
+          seats.length === 2
+            ? dealerSeat.seatNum
+            : (bbSeat.seatNum + 1) % seats.length,
+        folded: {},
       });
+
+      const actorSeatNum =
+        seats.length === 2
+          ? dealerSeat.seatNum
+          : (bbSeat.seatNum + 1) % seats.length;
+      const actorPlayerId = seats.find((s) => s.seatNum === actorSeatNum)?.playerId || "";
+      const toCallCents = toCallFor(contributions, actorPlayerId);
+      const minRaiseCents = minRaiseFrom({ lastAggressorSeatNum: bbSeat.seatNum }, table.bigBlindCents);
+      tx.update(handRef, { toCallCents, minRaiseCents });
+    });
+  }
+);
+
+// Trigger: player action intents
+export const onIntentCreated = onDocumentCreated(
+  { region: "us-central1", document: "tables/{tableId}/hands/{handId}/intents/{intentId}" },
+  async (event) => {
+    const { tableId, handId, intentId } = event.params;
+    const tableRef = db.collection("tables").doc(tableId);
+    const handRef = tableRef.collection("hands").doc(handId);
+    const intentRef = handRef.collection("intents").doc(intentId);
+
+    await db.runTransaction(async (tx) => {
+      const [tableSnap, handSnap, intentSnap] = await Promise.all([
+        tx.get(tableRef),
+        tx.get(handRef),
+        tx.get(intentRef),
+      ]);
+      if (!tableSnap.exists || !handSnap.exists || !intentSnap.exists) return;
+      const hand = handSnap.data() as any;
+      const intent = intentSnap.data() as any;
+
+      if (hand.status !== "pending" || hand.stage !== "preflop") {
+        tx.delete(intentRef);
+        return;
+      }
+
+      const seats = await getActiveSeats(tx, tableRef);
+      const folded: Record<string, true> = hand.folded || {};
+      const seatByNum: Record<number, SeatInfo> = {};
+      seats.forEach((s) => (seatByNum[s.seatNum] = s));
+      const seat = seats.find((s) => s.playerId === intent.playerId);
+      if (!seat || seat.seatNum !== hand.actorSeatNum || folded[intent.playerId]) {
+        tx.delete(intentRef);
+        return;
+      }
+      if (seat.chipStackCents <= 0) {
+        tx.delete(intentRef);
+        return;
+      }
+
+      const contributions: Record<string, number> = hand.contributions || {};
+      const toCall = toCallFor(contributions, intent.playerId);
+      let pot = hand.potCents || 0;
+      let actorSeatNum = hand.actorSeatNum;
+      let lastAggressorSeatNum = hand.lastAggressorSeatNum;
+      let minRaiseCents = hand.minRaiseCents;
+
+      const updateSeat = (playerId: string, newChips: number) => {
+        tx.update(tableRef.collection("seats").doc(playerId), {
+          chipStackCents: newChips,
+        });
+      };
+
+      const next = () => {
+        const ns = nextSeat(seats, actorSeatNum, folded);
+        const nextSeatInfo = seatByNum[ns];
+        if (
+          nextSeatInfo &&
+          ns === lastAggressorSeatNum &&
+          toCallFor(contributions, nextSeatInfo.playerId) === 0
+        ) {
+          tx.update(handRef, { status: "ended" });
+          tx.update(tableRef, { currentHandId: null });
+        } else if (nextSeatInfo) {
+          const tc = toCallFor(contributions, nextSeatInfo.playerId);
+          tx.update(handRef, { actorSeatNum: ns, toCallCents: tc });
+        }
+      };
+
+      switch (intent.type) {
+        case "fold": {
+          folded[intent.playerId] = true;
+          tx.update(handRef, { folded });
+          const remaining = seats.filter(
+            (s) => !folded[s.playerId] && s.chipStackCents > 0
+          );
+          if (remaining.length <= 1) {
+            tx.update(handRef, { status: "ended" });
+            tx.update(tableRef, { currentHandId: null });
+            tx.delete(intentRef);
+            return;
+          }
+          next();
+          break;
+        }
+        case "check": {
+          if (toCall !== 0) {
+            tx.delete(intentRef);
+            return;
+          }
+          next();
+          break;
+        }
+        case "call": {
+          if (toCall === 0) {
+            next();
+            break;
+          }
+          const callAmt = Math.min(toCall, seat.chipStackCents);
+          contributions[intent.playerId] =
+            (contributions[intent.playerId] || 0) + callAmt;
+          pot += callAmt;
+          seat.chipStackCents -= callAmt;
+          updateSeat(intent.playerId, seat.chipStackCents);
+          tx.update(handRef, { contributions, potCents: pot });
+          actorSeatNum = seat.seatNum;
+          next();
+          break;
+        }
+        case "raise": {
+          if (
+            typeof intent.amountCents !== "number" ||
+            intent.amountCents < minRaiseCents
+          ) {
+            tx.delete(intentRef);
+            return;
+          }
+          const highest = highestContribution(contributions);
+          const playerContrib = contributions[intent.playerId] || 0;
+          const target = highest + intent.amountCents;
+          const needed = target - playerContrib;
+          const pay = Math.min(needed, seat.chipStackCents);
+          contributions[intent.playerId] = playerContrib + pay;
+          pot += pay;
+          seat.chipStackCents -= pay;
+          updateSeat(intent.playerId, seat.chipStackCents);
+          lastAggressorSeatNum = seat.seatNum;
+          minRaiseCents = intent.amountCents;
+          tx.update(handRef, {
+            contributions,
+            potCents: pot,
+            lastAggressorSeatNum,
+            minRaiseCents,
+          });
+
+          const remaining = seats.filter(
+            (s) => !folded[s.playerId] && s.chipStackCents > 0
+          );
+          if (remaining.length <= 1) {
+            tx.update(handRef, { status: "ended" });
+            tx.update(tableRef, { currentHandId: null });
+            tx.delete(intentRef);
+            return;
+          }
+          next();
+          break;
+        }
+        default:
+          tx.delete(intentRef);
+          return;
+      }
+
+      tx.delete(intentRef);
     });
   }
 );

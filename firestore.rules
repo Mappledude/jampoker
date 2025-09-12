@@ -32,5 +32,16 @@ service cloud.firestore {
       allow read: if true;
       allow write: if false;
     }
+
+    match /tables/{tableId}/hands/{handId}/intents/{intentId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasOnly(
+            ['playerId', 'type', 'amountCents', 'createdAt']) &&
+          request.resource.data.playerId is string &&
+          request.resource.data.type in ['fold', 'check', 'call', 'raise'] &&
+          (request.resource.data.amountCents == null ||
+            request.resource.data.amountCents is number);
+      allow update, delete: if false;
+    }
   }
 }
