@@ -14,10 +14,12 @@
       <a href="/admin.html">Admin</a>
     </nav>
 
-    <!-- PLAYERS (kept from previous briefs) -->
+    <div id="you"></div>
+
+    <!-- PLAYERS -->
     <div class="card">
       <h1>Admin — Players</h1>
-      <p class="small">Add a player. Each new player starts with $1,000.00 (walletCents = 100000).</p>
+      <p class="small">Add a player. Each new player starts with $1,000.00.</p>
 
       <div style="display:flex; gap:8px; align-items:center; margin:12px 0;">
         <input id="player-name" placeholder="Player name" style="padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb;flex:1" />
@@ -33,10 +35,10 @@
       <div id="players-list" class="small">Loading players…</div>
     </div>
 
-    <!-- TABLES (new) -->
+    <!-- TABLES -->
     <div class="card" style="margin-top:16px;">
       <h1 style="margin-top:0;">Admin — Tables</h1>
-      <p class="small">Create a table with defaults. Fields are in dollars; we’ll store cents in Firestore.</p>
+      <p class="small">Create a table with defaults. Fields are in dollars; we store cents.</p>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin:12px 0;">
         <input id="table-name" placeholder="Table name (e.g., Family Table)" style="padding:10px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb;grid-column:1/-1" />
@@ -69,31 +71,17 @@
     </div>
   </div>
 
-  <!-- Firebase init -->
   <script type="module" src="/firebase-init.js"></script>
-
-  <!-- Firestore logic for Players + Tables -->
   <script type="module">
-    import { app } from "/firebase-init.js";
+    import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls } from "/common.js";
     import {
-      getFirestore, collection, addDoc, serverTimestamp,
-      query, orderBy, onSnapshot, doc, updateDoc, deleteDoc
+      collection, addDoc, serverTimestamp, query, orderBy, onSnapshot,
+      doc, updateDoc, deleteDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
-    const db = getFirestore(app);
+    renderCurrentPlayerControls("you");
 
-    // ---------- helpers ----------
-    const dollars = (cents) =>
-      `$${(cents/100).toLocaleString(undefined,{minimumFractionDigits:2, maximumFractionDigits:2})}`;
-    const parseDollarsToCents = (input) => {
-      const clean = String(input).replace(/[^0-9.]/g, "");
-      if (!clean) return null;
-      const value = Number(clean);
-      if (Number.isNaN(value)) return null;
-      return Math.max(0, Math.round(value * 100));
-    };
-
-    // ---------- PLAYERS (add/list/edit/delete) ----------
+    // ----- players (same behavior as before) -----
     const playersCol = collection(db, "players");
     const addBtn = document.getElementById("add-player");
     const nameInput = document.getElementById("player-name");
@@ -111,9 +99,7 @@
         nameInput.value = ""; nameInput.focus();
       } catch (err) {
         statusEl.textContent = "Error: " + (err?.message || err);
-      } finally {
-        addBtn.disabled = false;
-      }
+      } finally { addBtn.disabled = false; }
     });
 
     const renderPlayerRow = (id, d) => {
@@ -145,8 +131,7 @@
     });
 
     listEl?.addEventListener("click", async (e) => {
-      const row = e.target.closest(".row");
-      if (!row || row.getAttribute("data-type") !== "player") return;
+      const row = e.target.closest(".row"); if (!row || row.getAttribute("data-type") !== "player") return;
       const id = row.getAttribute("data-id");
       const status = row.querySelector(".row-status");
 
@@ -160,14 +145,14 @@
       }
 
       if (e.target.classList.contains("delete-btn")) {
-        const ok = confirm("Delete this player? This cannot be undone."); if (!ok) return;
+        const ok = confirm("Delete this player?"); if (!ok) return;
         status.textContent = "Deleting…";
-        try { await deleteDoc(doc(db, "players", id)); }
+        try { await deleteDoc(doc(db, "players", id)); } 
         catch (err) { status.textContent = "Error: " + (err?.message || err); }
       }
     });
 
-    // ---------- TABLES (create/list + archive toggle) ----------
+    // ----- tables (same as before) -----
     const tablesCol = collection(db, "tables");
     const tName = document.getElementById("table-name");
     const tMin = document.getElementById("min-buyin");
@@ -178,6 +163,33 @@
     const tBtn = document.getElementById("create-table");
     const tStatus = document.getElementById("table-status");
     const tList = document.getElementById("tables-list");
+
+    tBtn?.addEventListener("click", async () => {
+      const name = (tName.value || "").trim();
+      const minC = parseDollarsToCents(tMin.value);
+      const defC = parseDollarsToCents(tDef.value);
+      const maxC = parseDollarsToCents(tMax.value);
+      const sbC  = parseDollarsToCents(tSB.value);
+      const bbC  = parseDollarsToCents(tBB.value);
+
+      const err = (m) => (tStatus.textContent = m);
+
+      if (!name) return err("Enter a table name.");
+      if ([minC, defC, maxC, sbC, bbC].some(v => v === null)) return err("Enter valid numbers.");
+      if (minC > maxC) return err("Min buy-in > max.");
+      if (defC < minC || defC > maxC) return err("Default must be between min and max.");
+      if (sbC <= 0 || bbC <= 0) return err("Blinds must be > 0.");
+
+      tStatus.textContent = "Creating…"; tBtn.disabled = true;
+      try {
+        await addDoc(tablesCol, {
+          name, minBuyInCents: minC, maxBuyInCents: maxC, defaultBuyInCents: defC,
+          smallBlindCents: sbC, bigBlindCents: bbC, active: true, createdAt: serverTimestamp()
+        });
+        tStatus.textContent = "Table created ✔"; tName.value = "";
+      } catch (e) { tStatus.textContent = "Error: " + (e?.message || e); }
+      finally { tBtn.disabled = false; }
+    });
 
     const renderTableRow = (id, d) => {
       const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
@@ -200,46 +212,7 @@
       `;
     };
 
-    tBtn?.addEventListener("click", async () => {
-      const name = (tName.value || "").trim();
-      const minC = parseDollarsToCents(tMin.value);
-      const defC = parseDollarsToCents(tDef.value);
-      const maxC = parseDollarsToCents(tMax.value);
-      const sbC  = parseDollarsToCents(tSB.value);
-      const bbC  = parseDollarsToCents(tBB.value);
-
-      const err = (msg) => { tStatus.textContent = msg; return false; };
-
-      if (!name) return err("Please enter a table name.");
-      if ([minC, defC, maxC, sbC, bbC].some(v => v === null)) return err("Enter valid numbers for all fields.");
-      if (minC > maxC) return err("Min buy-in cannot be greater than max.");
-      if (defC < minC || defC > maxC) return err("Default buy-in must be between min and max.");
-      if (sbC <= 0 || bbC <= 0) return err("Blinds must be greater than zero.");
-
-      tStatus.textContent = "Creating…";
-      tBtn.disabled = true;
-      try {
-        await addDoc(tablesCol, {
-          name,
-          minBuyInCents: minC,
-          maxBuyInCents: maxC,
-          defaultBuyInCents: defC,
-          smallBlindCents: sbC,
-          bigBlindCents: bbC,
-          active: true,
-          createdAt: serverTimestamp()
-        });
-        tStatus.textContent = "Table created ✔";
-        tName.value = "";
-      } catch (e) {
-        tStatus.textContent = "Error: " + (e?.message || e);
-      } finally {
-        tBtn.disabled = false;
-      }
-    });
-
-    const tablesQ = query(tablesCol, orderBy("createdAt", "desc"));
-    onSnapshot(tablesQ, (snap) => {
+    onSnapshot(query(tablesCol, orderBy("createdAt", "desc")), (snap) => {
       if (!tList) return;
       if (snap.empty) { tList.textContent = "No tables yet."; return; }
       const rows = [];
@@ -247,7 +220,6 @@
       tList.innerHTML = rows.join("");
     });
 
-    // toggle active/archive
     document.addEventListener("click", async (e) => {
       const row = e.target.closest(".row");
       if (!row || row.getAttribute("data-type") !== "table") return;
@@ -257,8 +229,8 @@
       if (e.target.classList.contains("toggle-active-btn")) {
         status.textContent = "Updating…";
         try {
-          // read current label to infer new state
-          const toArchive = e.target.textContent.includes("Archive");
+          const label = e.target.textContent;
+          const toArchive = label.includes("Archive");
           await updateDoc(doc(db, "tables", id), { active: !toArchive });
           status.textContent = "Updated ✔";
         } catch (err) {
@@ -266,6 +238,8 @@
         }
       }
     });
+
+    // Render the “You” card
   </script>
 </body>
 </html>
