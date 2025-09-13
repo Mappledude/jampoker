@@ -1,0 +1,109 @@
+/* Table Room variants styles */
+
+/* base layout */
+#table-room {
+  position: relative;
+  max-width: 900px;
+  margin: 0 auto;
+  padding-top: 16px;
+}
+
+#board-header {
+  text-align: center;
+  margin-bottom: 8px;
+}
+
+.community-cards {
+  display: flex;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.seat-ring {
+  position: relative;
+  width: 100%;
+  padding-top: 100%;
+}
+
+.seat {
+  position: absolute;
+  width: 72px;
+  height: 40px;
+  transform: translate(-50%, -50%);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid #334155;
+}
+
+.seat.you {
+  font-weight: 700;
+}
+
+.seat.active {
+  box-shadow: 0 0 6px 2px gold;
+}
+
+/* Variant specific */
+body[data-variant="v1"] #table-room {
+  background: #165a18;
+  background-image: radial-gradient(circle at 50% 50%, rgba(255,255,255,.05), rgba(0,0,0,0));
+  border-radius: 50%;
+  padding: 40px;
+}
+body[data-variant="v1"] .seat {
+  background: #236b21;
+  border-radius: 50%;
+  color: #fff;
+  box-shadow: 0 2px 4px rgba(0,0,0,.5);
+}
+
+body[data-variant="v2"] #table-room {
+  background: #e5e5e5;
+  color: #111;
+}
+body[data-variant="v2"] .seat {
+  background: #fff;
+  border-radius: 20px;
+  color: #111;
+  border-color: #aaa;
+  box-shadow: none;
+}
+
+body[data-variant="v3"] #table-room {
+  background: #1f2937;
+  color: #0ff;
+}
+body[data-variant="v3"] .seat {
+  background: #111827;
+  border-radius: 6px;
+  color: #0ff;
+  box-shadow: 0 0 8px rgba(0,255,255,.5);
+}
+body[data-variant="v3"] .seat.active {
+  animation: pulse 1.2s infinite;
+}
+@keyframes pulse {
+  0%,100% { box-shadow: 0 0 8px rgba(0,255,255,.5); }
+  50% { box-shadow: 0 0 12px rgba(0,255,255,.9); }
+}
+
+body[data-variant="v4"] #table-room {
+  background: #222;
+}
+body[data-variant="v4"] .seat {
+  background: #333;
+  border-radius: 50%;
+  color: #fff;
+}
+body[data-variant="v4"] .seat-label {
+  display: none;
+}
+@media (min-width: 480px) {
+  body[data-variant="v4"] .seat-label {
+    display: block;
+  }
+}

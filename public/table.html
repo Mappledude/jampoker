@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Table</title>
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/table-variants.css" />
 </head>
 <body>
   <div class="wrap">
@@ -15,9 +16,11 @@
     </nav>
     <div id="you"></div>
     <div id="error" class="card" style="display:none;"></div>
-    <div id="table-info" class="card" style="margin-top:16px;"></div>
-    <div id="current-hand" class="card" style="margin-top:16px;"></div>
-    <div id="seats" class="card" style="margin-top:16px;"></div>
+    <div id="table-room">
+      <div id="board-header"></div>
+      <div id="community" class="community-cards"></div>
+      <div id="seat-ring" class="seat-ring"></div>
+    </div>
   </div>
   <div id="player-board" class="card" style="display:none;position:fixed;left:50%;bottom:0;transform:translateX(-50%);min-width:260px;"></div>
   <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
@@ -25,9 +28,7 @@
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
-    import {
-      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp, runTransaction, increment } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     renderCurrentPlayerControls("you");
     const debugChip = document.getElementById('debug-chip');
@@ -35,11 +36,19 @@
     debugChip.addEventListener('click', () => setDebug(!isDebug()));
 
     const params = new URLSearchParams(window.location.search);
-    const tableId = params.get('id');
+    const variant = params.get('variant') || 'v1';
+    document.body.dataset.variant = variant;
+
+    let tableId = null;
+    if (location.pathname.startsWith('/table/')) {
+      tableId = location.pathname.split('/')[2];
+    }
+    if (!tableId) tableId = params.get('id');
+
     const errorEl = document.getElementById('error');
-    const infoEl = document.getElementById('table-info');
-    const handEl = document.getElementById('current-hand');
-    const seatsEl = document.getElementById('seats');
+    const headerEl = document.getElementById('board-header');
+    const communityEl = document.getElementById('community');
+    const ringEl = document.getElementById('seat-ring');
     const boardEl = document.getElementById('player-board');
     const debugBox = document.getElementById('debug-box');
 
@@ -59,32 +68,27 @@
           errorEl.style.display = 'block';
           const msg = !snap.exists() ? 'Table not found' : 'Table archived';
           errorEl.innerHTML = `<h1>${msg}</h1><a href="/lobby.html">Back to Lobby</a>`;
-          infoEl.style.display = 'none';
-          handEl.style.display = 'none';
-          seatsEl.style.display = 'none';
           boardEl.style.display = 'none';
           return;
         }
-        infoEl.style.display = '';
-        handEl.style.display = '';
-        seatsEl.style.display = '';
+        errorEl.style.display = 'none';
         tableData = { id: snap.id, ...snap.data() };
-        renderTableInfo();
+        renderHeader();
         if (unsubHand) unsubHand();
         if (tableData.currentHandId) {
           const handRef = doc(db, 'tables', tableId, 'hands', tableData.currentHandId);
           unsubHand = onSnapshot(handRef, (hsnap) => {
             handData = hsnap.exists() ? hsnap.data() : null;
             renderHand();
+            renderPlayerBoard();
             updateDebug();
           });
         } else {
           handData = null;
           renderHand();
+          renderPlayerBoard();
           updateDebug();
         }
-        renderPlayerBoard();
-        updateDebug();
       });
 
       const seatsRef = collection(db, 'tables', tableId, 'seats');
@@ -93,8 +97,8 @@
         seatData = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         showSeatsDebug(tableId, snap.docs);
         renderSeats();
+        renderHeader();
         renderHand();
-        renderTableInfo();
         renderPlayerBoard();
         updateDebug();
       });
@@ -104,75 +108,62 @@
       if (e.target.id === 'cp-select') renderPlayerBoard();
     });
 
-    function renderTableInfo() {
-      if (!tableData) { infoEl.textContent = ''; return; }
+    function renderHeader() {
+      if (!tableData) { headerEl.textContent = ''; return; }
       const t = tableData;
-      const blindStr = `${dollars(t.smallBlindCents || 0)}/${dollars(t.bigBlindCents || 0)}`;
-      const rangeStr = `${dollars(t.minBuyInCents || 0)}–${dollars(t.maxBuyInCents || 0)} (default ${dollars(t.defaultBuyInCents || 0)})`;
       const derivedSeatCount = seatData.filter(s => s.occupiedBy).length;
-      const activeSeatCount = t.activeSeatCount ?? 0;
-      infoEl.innerHTML = `
+      const maxSeats = t.maxSeats || seatData.length;
+      headerEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
-        <div class="small">Blinds: ${blindStr}</div>
-        <div class="small">Buy-in: ${rangeStr}</div>
-        <div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>
+        <div class="small">${derivedSeatCount} / ${maxSeats} seated</div>
+        <div class="small">Pot: ${dollars(handData?.potCents || 0)}</div>
       `;
     }
 
     function renderHand() {
-      if (!handData) {
-        const seatCount = seatData.filter(s => s.occupiedBy).length;
-        handEl.innerHTML = seatCount < 2 ? 'Waiting for players…' : 'Waiting for next dealer’s choice…';
-        renderPlayerBoard();
-        return;
-      }
-      if (handData.status === 'ended') {
-        handEl.textContent = handData.showdownPending ? 'Showdown pending — pot held' : 'Hand ended — waiting for next hand…';
-        renderPlayerBoard();
-        return;
-      }
-      const h = handData;
-      const vLabel = h.variant === 'omaha' ? 'Omaha' : "Hold'em";
-      const stageStr = stageLabel(h);
-      const getNameBySeat = (n) => seatData.find(s => s.seatIndex === n)?.displayName || '(left)';
-      const dealerName = h.dealerName || getNameBySeat(h.positions?.dealerSeatNum);
-      const sbName = getNameBySeat(h.positions?.sbSeatNum);
-      const bbName = getNameBySeat(h.positions?.bbSeatNum);
-      const actorName = getNameBySeat(h.actorSeatNum);
-      const board = (h.board || []).map(c => `<span class="card-chip">${formatCard(c)}</span>`).join(' ');
-      let contrib = '';
-      if (h.contributions) {
-        const parts = [];
-        for (const [pid, cents] of Object.entries(h.contributions)) {
-          const name = seatData.find(s => s.occupiedBy === pid)?.displayName || '(left)';
-          parts.push(`${name}: ${dollars(cents)}`);
+      if (!handData) { communityEl.innerHTML = ''; return; }
+      const board = (handData.board || []).map(c => `<span class="card-chip">${formatCard(c)}</span>`).join(' ');
+      communityEl.innerHTML = board;
+    }
+
+    async function seatAction(seat) {
+      const cp = getCurrentPlayer();
+      if (!cp) { alert('Select a Current Player first.'); return; }
+      try {
+        if (seat.occupiedBy && seat.occupiedBy === cp.id) {
+          await leaveSeat(cp);
+        } else if (!seat.occupiedBy) {
+          await claimSeat(seat.seatIndex, cp);
         }
-        if (parts.length) contrib = `<div class="small">${parts.join(', ')}</div>`;
+      } catch (err) {
+        alert(err?.message || err);
       }
-      const boardLine = (h.board && h.board.length)
-        ? `<div class="small">Board: ${board}</div>`
-        : '';
-      const debugLine = isDebug()
-        ? `<div class="small">board=${(h.board||[]).join(',')}${h.deckIndex !== undefined ? ` deckIndex=${h.deckIndex}` : ''}</div>`
-        : '';
-      handEl.innerHTML = `
-        <div>Current Hand: ${vLabel} • Dealer: ${dealerName} • Status: ${h.status}</div>
-        <div class="small" style="margin-top:4px;">Pot: ${dollars(h.potCents || 0)}</div>
-        <div class="small">Stage: ${stageStr}</div>
-        ${boardLine}
-        <div class="small">Positions: Dealer ${dealerName}, SB ${sbName}, BB ${bbName}</div>
-        ${contrib}
-        <div class="small" style="margin-top:4px;">Action: ${actorName}</div>
-        ${debugLine}
-      `;
-      renderPlayerBoard();
     }
 
     function renderSeats() {
-      const rows = seatData
-        .filter((s) => s.occupiedBy)
-        .map((s) => `<div>${s.displayName || '(no name)'} • ${dollars(s.stackCents || 0)}</div>`);
-      seatsEl.innerHTML = `<h2 style="margin-top:0;">Seats</h2>${rows.join('') || '<div class="small">(none yet)</div>'}`;
+      const maxSeats = tableData?.maxSeats || 0;
+      ringEl.innerHTML = '';
+      const size = ringEl.offsetWidth;
+      const radius = size / 2 - 50;
+      const center = size / 2;
+      for (let i = 0; i < maxSeats; i++) {
+        const seat = seatData.find(s => s.seatIndex === i) || { seatIndex: i };
+        const angle = (2 * Math.PI * i / maxSeats) - Math.PI / 2;
+        const x = center + radius * Math.cos(angle);
+        const y = center + radius * Math.sin(angle);
+        const btn = document.createElement('button');
+        btn.className = 'seat';
+        btn.style.left = `${x}px`;
+        btn.style.top = `${y}px`;
+        if (seat.occupiedBy === getCurrentPlayer()?.id) btn.classList.add('you');
+        if (handData && i === handData.actorSeatNum) btn.classList.add('active');
+        const span = document.createElement('span');
+        span.className = 'seat-label';
+        span.textContent = seat.displayName || 'Sit';
+        btn.appendChild(span);
+        btn.addEventListener('click', () => seatAction(seat));
+        ringEl.appendChild(btn);
+      }
     }
 
     let intentPending = false;
@@ -227,6 +218,59 @@
         callBtn.addEventListener('click', () => send({ playerId: current.id, type: toCall > 0 ? 'call' : 'check' }));
         raiseBtn.addEventListener('click', () => send({ playerId: current.id, type: 'raise', amountCents: minRaise }));
       }
+    }
+
+    async function claimSeat(seatIndex, cp) {
+      await runTransaction(db, async (tx) => {
+        const tableRef = doc(db, 'tables', tableId);
+        const seatRef = doc(db, 'tables', tableId, 'seats', String(seatIndex));
+        const seatSnap = await tx.get(seatRef);
+        if (seatSnap.exists() && seatSnap.data()?.occupiedBy) throw new Error('Seat taken');
+        tx.set(seatRef, {
+          seatIndex,
+          seatNum: seatIndex,
+          occupiedBy: cp.id,
+          playerId: cp.id,
+          displayName: cp.name || '',
+          playerName: cp.name || '',
+          sittingOut: false,
+          stackCents: tableData?.defaultBuyInCents || 0,
+          chipStackCents: tableData?.defaultBuyInCents || 0,
+          updatedAt: serverTimestamp(),
+          active: true,
+        });
+        tx.update(tableRef, { activeSeatCount: increment(1) });
+      });
+    }
+
+    async function leaveSeat(cp) {
+      await runTransaction(db, async (tx) => {
+        const tableRef = doc(db, 'tables', tableId);
+        const tableSnap = await tx.get(tableRef);
+        const maxSeats = tableSnap.data()?.maxSeats || 0;
+        let seatRef = null;
+        for (let i = 0; i < maxSeats; i++) {
+          const sr = doc(db, 'tables', tableId, 'seats', String(i));
+          const ss = await tx.get(sr);
+          if (ss.exists && ss.data()?.occupiedBy === cp.id) {
+            seatRef = sr;
+            break;
+          }
+        }
+        if (!seatRef) throw new Error('You are not seated here.');
+        tx.update(seatRef, {
+          occupiedBy: null,
+          playerId: null,
+          displayName: null,
+          playerName: null,
+          sittingOut: false,
+          stackCents: null,
+          chipStackCents: null,
+          updatedAt: serverTimestamp(),
+          active: false,
+        });
+        tx.update(tableRef, { activeSeatCount: increment(-1) });
+      });
     }
 
     function updateDebug() {
