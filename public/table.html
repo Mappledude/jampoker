@@ -78,11 +78,12 @@
       });
 
       const seatsRef = collection(db, 'tables', tableId, 'seats');
-      onSnapshot(query(seatsRef, orderBy('seatNum', 'asc')), (snap) => {
-        seatData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      onSnapshot(query(seatsRef, orderBy('seatIndex', 'asc')), (snap) => {
+        seatData = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         showSeatsDebug(tableId, snap.docs);
         renderSeats();
         renderHand();
+        renderTableInfo();
         updateDebug();
       });
     }
@@ -92,16 +93,19 @@
       const t = tableData;
       const blindStr = `${dollars(t.smallBlindCents || 0)}/${dollars(t.bigBlindCents || 0)}`;
       const rangeStr = `${dollars(t.minBuyInCents || 0)}–${dollars(t.maxBuyInCents || 0)} (default ${dollars(t.defaultBuyInCents || 0)})`;
+      const derivedSeatCount = seatData.filter(s => s.occupiedBy).length;
+      const activeSeatCount = t.activeSeatCount ?? 0;
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
         <div class="small">Buy-in: ${rangeStr}</div>
+        <div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>
       `;
     }
 
     function renderHand() {
       if (!handData) {
-        const seatCount = seatData.filter(s => s.active).length;
+        const seatCount = seatData.filter(s => s.occupiedBy).length;
         handEl.innerHTML = seatCount < 2 ? 'Waiting for players…' : 'Waiting for next dealer’s choice…';
         actionEl.style.display = 'none';
         return;
@@ -114,7 +118,7 @@
       const h = handData;
       const vLabel = h.variant === 'omaha' ? 'Omaha' : "Hold'em";
       const stageStr = stageLabel(h);
-      const getNameBySeat = (n) => seatData.find(s => s.seatNum === n)?.playerName || '(left)';
+      const getNameBySeat = (n) => seatData.find(s => s.seatIndex === n)?.displayName || '(left)';
       const dealerName = h.dealerName || getNameBySeat(h.positions?.dealerSeatNum);
       const sbName = getNameBySeat(h.positions?.sbSeatNum);
       const bbName = getNameBySeat(h.positions?.bbSeatNum);
@@ -124,7 +128,7 @@
       if (h.contributions) {
         const parts = [];
         for (const [pid, cents] of Object.entries(h.contributions)) {
-          const name = seatData.find(s => s.playerId === pid)?.playerName || '(left)';
+          const name = seatData.find(s => s.occupiedBy === pid)?.displayName || '(left)';
           parts.push(`${name}: ${dollars(cents)}`);
         }
         if (parts.length) contrib = `<div class="small">${parts.join(', ')}</div>`;
@@ -149,7 +153,9 @@
     }
 
     function renderSeats() {
-      const rows = seatData.map(s => `<div>${s.playerName || '(no name)'} • ${dollars(s.chipStackCents || 0)}</div>`);
+      const rows = seatData
+        .filter((s) => s.occupiedBy)
+        .map((s) => `<div>${s.displayName || '(no name)'} • ${dollars(s.stackCents || 0)}</div>`);
       seatsEl.innerHTML = `<h2 style="margin-top:0;">Seats</h2>${rows.join('') || '<div class="small">(none yet)</div>'}`;
     }
 
@@ -158,8 +164,8 @@
       const current = getCurrentPlayer();
       if (!handData || !current) { actionEl.style.display = 'none'; return; }
       const folded = handData.folded || {};
-      const currentSeat = seatData.find(s => s.playerId === current.id);
-      const isActor = currentSeat && currentSeat.seatNum === handData.actorSeatNum && !folded[current.id] && (currentSeat.chipStackCents > 0);
+      const currentSeat = seatData.find(s => s.occupiedBy === current.id);
+      const isActor = currentSeat && currentSeat.seatIndex === handData.actorSeatNum && !folded[current.id] && (currentSeat.stackCents > 0);
       if (!isActor) { actionEl.style.display = 'none'; return; }
 
       const toCall = handData.toCallCents || 0;

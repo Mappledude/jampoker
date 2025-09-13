@@ -28,8 +28,8 @@
   <script type="module">
     import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls, isDebug, setDebug, formatCard, stageLabel } from "/common.js";
     import {
-      collection, query, orderBy, onSnapshot, doc, collection as subcol,
-      runTransaction, serverTimestamp, getDoc, updateDoc
+      collection, query, orderBy, where, onSnapshot, doc, collection as subcol,
+      runTransaction, serverTimestamp, increment, getDoc, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     renderCurrentPlayerControls("you");
@@ -133,7 +133,7 @@
       blocks.forEach(updateDebug);
     };
 
-    onSnapshot(query(tablesCol, orderBy("createdAt", "desc")), (snap) => {
+    onSnapshot(query(tablesCol, where("active", "!=", false), orderBy("active"), orderBy("createdAt", "desc")), (snap) => {
       blocks = [];
       seatUnsubs.forEach(u => u());
       seatUnsubs.clear();
@@ -150,15 +150,15 @@
           const seated = [];
           const seatMap = [];
           let activeCount = 0;
-          seatSnap.forEach(s => {
+          seatSnap.forEach((s) => {
             const sd = s.data();
-            if (sd.active !== false) {
-              seated.push(`<div style=\\"display:flex;justify-content:space-between;\\"><span>${sd.playerName || sd.playerId}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
-              seatMap.push({ seatNum: sd.seatNum, playerName: sd.playerName || sd.playerId });
+            if (sd.occupiedBy) {
+              seated.push(`<div style=\\"display:flex;justify-content:space-between;\\"><span>${sd.displayName || sd.occupiedBy}</span><span>${dollars(sd.stackCents || 0)}</span></div>`);
+              seatMap.push({ seatNum: sd.seatIndex, playerName: sd.displayName || sd.occupiedBy });
               activeCount++;
             }
           });
-          const idx = blocks.findIndex(b => b.id === id);
+          const idx = blocks.findIndex((b) => b.id === id);
           if (idx >= 0) {
             blocks[idx].seatsHtml = seated.join("") || "(none yet)";
             blocks[idx].seatCount = activeCount;
@@ -202,10 +202,10 @@
       await runTransaction(db, async (tx) => {
         const tableRef = doc(db, "tables", tableId);
         const playerRef = doc(db, "players", cp.id);
-        const seatRef = doc(db, "tables", tableId, "seats", cp.id);
 
-        const [tableSnap, playerSnap, seatSnap] = await Promise.all([
-          tx.get(tableRef), tx.get(playerRef), tx.get(seatRef)
+        const [tableSnap, playerSnap] = await Promise.all([
+          tx.get(tableRef),
+          tx.get(playerRef),
         ]);
         if (!tableSnap.exists()) throw new Error("Table not found.");
         if (!playerSnap.exists()) throw new Error("Player not found.");
@@ -213,21 +213,45 @@
         const t = tableSnap.data();
         const p = playerSnap.data();
 
-        if (amountCents < (t.minBuyInCents||0) || amountCents > (t.maxBuyInCents||0))
+        if (amountCents < (t.minBuyInCents || 0) || amountCents > (t.maxBuyInCents || 0))
           throw new Error("Amount must be between min and max buy-in.");
-        if ((p.walletCents||0) < amountCents)
+        if ((p.walletCents || 0) < amountCents)
           throw new Error("Not enough wallet balance.");
-        if (seatSnap.exists())
-          throw new Error("You are already seated at this table.");
+        const maxSeats = t.maxSeats || 0;
+        if ((t.activeSeatCount || 0) >= maxSeats)
+          throw new Error("Table full.");
+        let seatRef = null;
+        let seatIndex = -1;
+        for (let i = 0; i < maxSeats; i++) {
+          const sr = doc(db, "tables", tableId, "seats", String(i));
+          const ss = await tx.get(sr);
+          const sd = ss.data();
+          if (sd?.occupiedBy === cp.id)
+            throw new Error("You are already seated at this table.");
+          if (!ss.exists || !sd?.occupiedBy) {
+            if (seatRef === null) {
+              seatRef = sr;
+              seatIndex = i;
+            }
+          }
+        }
+        if (!seatRef) throw new Error("No available seats.");
 
-        tx.update(playerRef, { walletCents: (p.walletCents||0) - amountCents });
+        tx.update(playerRef, { walletCents: (p.walletCents || 0) - amountCents });
         tx.set(seatRef, {
+          seatIndex,
+          seatNum: seatIndex,
+          occupiedBy: cp.id,
           playerId: cp.id,
+          displayName: cp.name || p.name || "",
           playerName: cp.name || p.name || "",
+          sittingOut: false,
+          stackCents: amountCents,
           chipStackCents: amountCents,
-          satAt: serverTimestamp(),
-          active: true
+          updatedAt: serverTimestamp(),
+          active: true,
         });
+        tx.update(tableRef, { activeSeatCount: increment(1) });
       });
     }
 
@@ -277,17 +301,40 @@
         try {
           await runTransaction(db, async (tx) => {
             const playerRef = doc(db, "players", cp.id);
-            const seatRef = doc(db, "tables", tableId, "seats", cp.id);
-
-            const [playerSnap, seatSnap] = await Promise.all([tx.get(playerRef), tx.get(seatRef)]);
-            if (!seatSnap.exists()) throw new Error("You are not seated here.");
+            const tableRef = doc(db, "tables", tableId);
+            const playerSnap = await tx.get(playerRef);
+            const tableSnap = await tx.get(tableRef);
+            const maxSeats = tableSnap.data()?.maxSeats || 0;
+            let seatRef = null;
+            let seatSnap = null;
+            for (let i = 0; i < maxSeats; i++) {
+              const sr = doc(db, "tables", tableId, "seats", String(i));
+              const ss = await tx.get(sr);
+              if (ss.exists && ss.data()?.occupiedBy === cp.id) {
+                seatRef = sr;
+                seatSnap = ss;
+                break;
+              }
+            }
+            if (!seatRef || !seatSnap) throw new Error("You are not seated here.");
 
             const p = playerSnap.data() || {};
             const s = seatSnap.data();
-            const newWallet = (p.walletCents || 0) + (s.chipStackCents || 0);
+            const newWallet = (p.walletCents || 0) + (s.stackCents || 0);
 
             tx.update(playerRef, { walletCents: newWallet });
-            tx.delete(seatRef);
+            tx.update(seatRef, {
+              occupiedBy: null,
+              playerId: null,
+              displayName: null,
+              playerName: null,
+              sittingOut: false,
+              stackCents: null,
+              chipStackCents: null,
+              updatedAt: serverTimestamp(),
+              active: false,
+            });
+            tx.update(tableRef, { activeSeatCount: increment(-1) });
           });
           alert("You left the table. Chips returned to wallet.");
         } catch (err) {
