@@ -2,6 +2,10 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
+    }
+
     // DEV: players are open until Auth is added.
     match /players/{playerId} {
       allow read, write: if true;
@@ -11,26 +15,27 @@ service cloud.firestore {
       // Players may read only active tables.
       allow read: if resource.data.active == true;
 
-      // Allow creating/deleting tables from Admin UI (dev phase).
-      allow create, delete: if true;
+      // Admin keeps create & destructive updates
+      allow create, delete: if isAdmin();
 
-      // Allow client to change nextVariantId, or admin to archive.
-      allow update: if request.resource.data.diff(resource.data).changedKeys().hasOnly(['nextVariantId','activeSeatCount']) ||
-        (request.resource.data.diff(resource.data).changedKeys().hasOnly(['active', 'deletedAt']) &&
-         resource.data.active == true && request.resource.data.active == false);
-    }
+      // Allow players (anon auth) to update ONLY activeSeatCount
+      allow update: if (request.auth != null &&
+        request.resource.data.diff(resource.data).changedKeys().hasOnly(['activeSeatCount']))
+        || isAdmin();
 
-    match /tables/{tableId}/seats/{playerId} {
-      allow read: if true;
+      match /seats/{seatId} {
+        allow read: if true;
 
-      // Seats are created when a player joins and removed when they leave.
-      // Chip stacks and seat numbers are managed by the server, so updates
-      // are only allowed when the player is updating their own seat record.
-      allow create, delete: if true;
-      allow update: if
-        request.auth != null &&
-        request.auth.uid == request.resource.data.occupiedBy &&
-        request.auth.uid == request.resource.data.playerId;
+        // Allow players (anon auth) to claim/leave seats with limited fields only
+        allow create, update: if request.auth != null &&
+          request.resource.data.diff(resource.data).changedKeys().subsetOf([
+            'seatIndex','seatNum','occupiedBy','playerId','playerName','displayName',
+            'sittingOut','stackCents','chipStackCents','updatedAt','active'
+          ]) &&
+          (!resource.exists || request.resource.data.seatIndex == resource.data.seatIndex);
+        // No deletes by players
+        allow delete: if false;
+      }
     }
 
     // Hands are server-managed only.

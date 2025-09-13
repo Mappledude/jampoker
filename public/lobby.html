@@ -26,11 +26,19 @@
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
+    import { app } from "/firebase-init.js";
     import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls, isDebug, setDebug, formatCard, stageLabel, debugLog } from "/common.js";
     import {
       collection, query, orderBy, where, onSnapshot, doc, collection as subcol,
       runTransaction, serverTimestamp, increment, getDoc, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+    const auth = getAuth(app);
+    onAuthStateChanged(auth, (u) => {
+      if (u) console.log(`auth.anon.ready: uid=${u.uid}`);
+      else signInAnonymously(auth).catch(console.error);
+    });
 
     renderCurrentPlayerControls("you");
     const debugChip = document.getElementById('debug-chip');
@@ -228,12 +236,14 @@
     });
 
     async function joinTable(tableId, cp, amountCents) {
-      await runTransaction(db, async (tx) => {
-        const tableRef = doc(db, "tables", tableId);
-        const playerRef = doc(db, "players", cp.id);
+      let seatIndex = -1;
+      try {
+        await runTransaction(db, async (tx) => {
+          const tableRef = doc(db, "tables", tableId);
+          const playerRef = doc(db, "players", cp.id);
 
-        const [tableSnap, playerSnap] = await Promise.all([
-          tx.get(tableRef),
+          const [tableSnap, playerSnap] = await Promise.all([
+            tx.get(tableRef),
           tx.get(playerRef),
         ]);
         if (!tableSnap.exists()) throw new Error("Table not found.");
@@ -268,22 +278,31 @@
         }
         if (!seatRef) throw new Error("No available seats.");
 
-        tx.update(playerRef, { walletCents: (p.walletCents || 0) - amountCents });
-        tx.set(seatRef, {
-          seatIndex,
-          seatNum: seatIndex,
-          occupiedBy: cp.id,
-          playerId: cp.id,
-          displayName: cp.name || p.name || "",
-          playerName: cp.name || p.name || "",
-          sittingOut: false,
-          stackCents: amountCents,
-          chipStackCents: amountCents,
-          updatedAt: serverTimestamp(),
-          active: true,
+          tx.update(playerRef, { walletCents: (p.walletCents || 0) - amountCents });
+          tx.set(seatRef, {
+            seatIndex,
+            seatNum: seatIndex,
+            occupiedBy: cp.id,
+            playerId: cp.id,
+            displayName: cp.name || p.name || "",
+            playerName: cp.name || p.name || "",
+            sittingOut: false,
+            stackCents: amountCents,
+            chipStackCents: amountCents,
+            updatedAt: serverTimestamp(),
+            active: true,
+          });
+          tx.update(tableRef, { activeSeatCount: increment(1) });
         });
-        tx.update(tableRef, { activeSeatCount: increment(1) });
-      });
+        debugLog('seat.tx.claim.ok', { seatIndex, uid: cp.id });
+      } catch (err) {
+        debugLog('seat.tx.claim.fail', { code: err?.code });
+        const msg = err?.code === 'permission-denied'
+          ? "You're not signed in. Try again in 2s."
+          : "Seat taken—try another.";
+        alert(msg);
+        throw err;
+      }
     }
 
     // Click handlers (join/leave)
@@ -318,7 +337,7 @@
           await joinTable(tableId, cp, amountCents);
           status.textContent = "Joined ✔";
         } catch (err) {
-          status.textContent = "Error: " + (err?.message || err);
+          status.textContent = "Error joining";
         }
         return;
       }
@@ -355,12 +374,27 @@
             const newWallet = (p.walletCents || 0) + (s.chipStackCents || 0);
 
             tx.update(playerRef, { walletCents: newWallet });
-            tx.delete(seatRef);
+            tx.update(seatRef, {
+              occupiedBy: null,
+              playerId: null,
+              playerName: null,
+              displayName: '',
+              sittingOut: false,
+              stackCents: 0,
+              chipStackCents: 0,
+              updatedAt: serverTimestamp(),
+              active: false,
+            });
             tx.update(tableRef, { activeSeatCount: increment(-1) });
           });
           alert("You left the table. Chips returned to wallet.");
+          debugLog('seat.tx.leave.ok');
         } catch (err) {
-          alert("Error: " + (err?.message || err));
+          debugLog('seat.tx.leave.fail', { code: err?.code });
+          const msg = err?.code === 'permission-denied'
+            ? "You're not signed in. Try again in 2s."
+            : "Error leaving seat.";
+          alert(msg);
         }
         return;
       }
