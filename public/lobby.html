@@ -32,13 +32,7 @@
       collection, query, orderBy, where, onSnapshot, doc, collection as subcol,
       runTransaction, serverTimestamp, increment, getDoc, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-
-    const auth = getAuth(app);
-    onAuthStateChanged(auth, (u) => {
-      if (u) console.log(`auth.anon.ready: uid=${u.uid}`);
-      else signInAnonymously(auth).catch(console.error);
-    });
+    import { awaitAuthReady } from "/auth.js";
 
     renderCurrentPlayerControls("you");
     const debugChip = document.getElementById('debug-chip');
@@ -236,6 +230,7 @@
     });
 
     async function joinTable(tableId, cp, amountCents) {
+      await awaitAuthReady();
       let seatIndex = -1;
       try {
         await runTransaction(db, async (tx) => {
@@ -346,6 +341,7 @@
         if (!cp) { alert("Select a Current Player first."); return; }
         const tableId = leaveBtn.dataset.tableId;
 
+        await awaitAuthReady();
         const ok = confirm("Leave this table and return remaining chips to your wallet?");
         if (!ok) return;
 

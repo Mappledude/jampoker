@@ -97,24 +97,38 @@
       collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
       doc, updateDoc, deleteDoc, setDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-
-    const auth = getAuth(app);
-    onAuthStateChanged(auth, (u) => {
-      if (u) console.log(`auth.anon.ready: uid=${u.uid}`);
-      else signInAnonymously(auth).catch(console.error);
-    });
+    import { awaitAuthReady, isAuthed } from "/auth.js";
 
     renderCurrentPlayerControls("you");
 
-    // ----- players (same behavior as before) -----
+    // ----- players / tables shared auth gate -----
     const playersCol = collection(db, "players");
     const addBtn = document.getElementById("add-player");
     const nameInput = document.getElementById("player-name");
     const statusEl = document.getElementById("add-status");
     const listEl = document.getElementById("players-list");
 
+    const tablesCol = collection(db, "tables");
+    const tName = document.getElementById("table-name");
+    const tMin = document.getElementById("min-buyin");
+    const tDef = document.getElementById("default-buyin");
+    const tMax = document.getElementById("max-buyin");
+    const tSB  = document.getElementById("sb");
+    const tBB  = document.getElementById("bb");
+    const tBtn = document.getElementById("create-table");
+    const tStatus = document.getElementById("table-status");
+
+    addBtn.disabled = true;
+    tBtn.disabled = true;
+    statusEl.textContent = tStatus.textContent = "Signing in…";
+    await awaitAuthReady();
+    addBtn.disabled = false;
+    tBtn.disabled = false;
+    statusEl.textContent = "";
+    tStatus.textContent = "";
+
     addBtn?.addEventListener("click", async () => {
+      if (!isAuthed()) { statusEl.textContent = "Auth not ready"; setTimeout(() => (statusEl.textContent = ""), 2000); return; }
       const name = (nameInput.value || "").trim();
       if (!name) { statusEl.textContent = "Please enter a name."; return; }
       statusEl.textContent = "Saving…";
@@ -179,17 +193,12 @@
     });
 
     // ----- tables -----
-    const tablesCol = collection(db, "tables");
-    const tName = document.getElementById("table-name");
-    const tMin = document.getElementById("min-buyin");
-    const tDef = document.getElementById("default-buyin");
-    const tMax = document.getElementById("max-buyin");
-    const tSB  = document.getElementById("sb");
-    const tBB  = document.getElementById("bb");
-    const tBtn = document.getElementById("create-table");
-    const tStatus = document.getElementById("table-status");
-
     tBtn?.addEventListener("click", async () => {
+      if (!isAuthed()) {
+        tStatus.textContent = "Auth not ready";
+        setTimeout(() => (tStatus.textContent = ""), 2000);
+        return;
+      }
       const name = (tName.value || "").trim();
       const minC = parseDollarsToCents(tMin.value);
       const defC = parseDollarsToCents(tDef.value);
@@ -219,31 +228,33 @@
           buyIn: { minCents: minC, maxCents: maxC, defaultCents: defC },
         });
 
-        try {
-          const seatsCol = collection(tableRef, "seats");
-          const seatWrites = [];
-          for (let i = 0; i < maxSeats; i++) {
-            seatWrites.push(setDoc(doc(seatsCol, String(i)), {
-              seatIndex: i,
-              occupiedBy: null,
-              displayName: null,
-              sittingOut: false,
-              stackCents: null,
-              updatedAt: serverTimestamp(),
-            }));
+        (async () => {
+          try {
+            const seatsCol = collection(tableRef, "seats");
+            const seatWrites = [];
+            for (let i = 0; i < maxSeats; i++) {
+              seatWrites.push(setDoc(doc(seatsCol, String(i)), {
+                seatIndex: i,
+                occupiedBy: null,
+                displayName: null,
+                sittingOut: false,
+                stackCents: null,
+                updatedAt: serverTimestamp(),
+              }));
+            }
+            await Promise.all(seatWrites);
+            console.log('admin.seats.seed.ok', { count: seatWrites.length });
+          } catch (err) {
+            console.error('admin.seats.seed.fail', { code: err?.code, message: err?.message });
           }
-          await Promise.all(seatWrites);
-          console.log('admin.seats.seed.ok', { count: seatWrites.length });
-        } catch (err) {
-          console.error('admin.seats.seed.fail', err);
-        }
+        })();
 
         console.log('admin.table.create.ok', { id: tableRef.id });
         tStatus.textContent = `Table created: ${tableRef.id}`;
         tName.value = "";
       } catch (e) {
-        console.error('admin.table.create.fail', { code: e?.code });
-        tStatus.textContent = "Error: " + (e?.code || e?.message || e);
+        console.error('admin.table.create.fail', { code: e?.code, message: e?.message });
+        tStatus.textContent = `Error: ${e?.code || ''} ${e?.message || e}`;
       } finally {
         tBtn.disabled = false;
       }

@@ -29,13 +29,7 @@
     import {
       doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
-
-    const auth = getAuth(app);
-    onAuthStateChanged(auth, (u) => {
-      if (u) console.log(`auth.anon.ready: uid=${u.uid}`);
-      else signInAnonymously(auth).catch(console.error);
-    });
+    import { awaitAuthReady } from "/auth.js";
 
     renderCurrentPlayerControls("you");
     const debugChip = document.getElementById('debug-chip');
@@ -229,6 +223,7 @@
           intentPending = true;
           disable(true);
           try {
+            await awaitAuthReady();
             await addDoc(intentsCol, { ...data, createdAt: serverTimestamp() });
           } catch (e) {
             console.error(e);
