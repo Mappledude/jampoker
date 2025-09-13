@@ -12,6 +12,8 @@ const firebaseConfig = {
 
 // Initialize Firebase and export for other scripts (later)
 export const app = initializeApp(firebaseConfig);
+// Expose projectId for debug tools
+window.__FIREBASE_PROJECT_ID__ = firebaseConfig.projectId;
 
 // Tiny visual check: write the projectId onto the home page if there's an element with id="fb-status"
 window.addEventListener("DOMContentLoaded", () => {

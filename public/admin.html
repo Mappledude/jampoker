@@ -88,6 +88,92 @@
       </table>
     </div>
   </div>
+  <div id="admin-debug" style="position:fixed;left:0;right:0;bottom:0;font:12px/1.4 monospace;color:#eee;z-index:9999;">
+    <div id="dbg-handle" style="background:#111;padding:2px 8px;border-top:1px solid #333;cursor:pointer;">🐞 Debug (Admin)</div>
+    <div id="dbg-panel" style="display:none;background:#111;border-top:1px solid #333;">
+      <div style="padding:6px 8px;display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <strong>🐞 Debug (Admin)</strong>
+        <span>projectId: <b id="dbg-proj">…</b></span>
+        <span>uid: <b id="dbg-uid">none</b></span>
+        <span>time: <b id="dbg-time">--</b></span>
+        <label style="margin-left:auto;display:flex;align-items:center;gap:6px;">
+          <input type="checkbox" id="dbg-seed" checked />
+          <span>Seed seats after create</span>
+        </label>
+        <button id="dbg-copy">Copy Report</button>
+        <button id="dbg-clear">Clear</button>
+        <button id="dbg-test">Test Write</button>
+      </div>
+      <textarea id="dbg-log" readonly style="width:100%;height:160px;padding:8px;box-sizing:border-box;background:#000;color:#0f0;border:none;outline:none;"></textarea>
+    </div>
+  </div>
+  <script>
+    const dbg = (() => {
+      const buf = [];
+      const el = { root:null, log:null, uid:null, proj:null, copyBtn:null, clearBtn:null, seedChk:null, testBtn:null, handle:null, panel:null, time:null };
+      const ts = () => new Date().toISOString();
+      const push = (type, ctx={}) => {
+        const line = { ts: ts(), page: 'ADMIN', type, ctx };
+        buf.push(line);
+        if (el.log) {
+          el.log.value += `${line.ts} · ${line.type}${Object.keys(ctx).length ? ' ' + JSON.stringify(ctx) : ''}\n`;
+          el.log.scrollTop = el.log.scrollHeight;
+        }
+      };
+      const exportMarkdown = () => {
+        const meta = [
+          `# JamPoker Admin Debug Report`,
+          `- projectId: ${window.__FIREBASE_PROJECT_ID__ || 'unknown'}`,
+          `- page: ADMIN`,
+          `- url: ${location.href}`,
+          `- uid: ${el.uid?.textContent || 'none'}`,
+          `- timestamp: ${ts()}`,
+          ``,
+          `## Last ${buf.length} events`,
+          '```json',
+          JSON.stringify(buf, null, 2),
+          '```'
+        ].join('\n');
+        return meta;
+      };
+      const copy = async () => {
+        const text = exportMarkdown();
+        try { await navigator.clipboard.writeText(text); push('debug.copy.ok'); }
+        catch(e){ push('debug.copy.fail', { message: e?.message }); }
+      };
+      const clear = () => { buf.length = 0; if (el.log) el.log.value = ''; push('debug.cleared'); };
+      const setUid = (uid) => { if (el.uid) el.uid.textContent = uid || 'none'; };
+      const setProj = (p) => { if (el.proj) el.proj.textContent = p; };
+      const seedAfterCreate = () => !!(el.seedChk && el.seedChk.checked);
+      const mount = () => {
+        el.root = document.getElementById('admin-debug');
+        el.log = document.getElementById('dbg-log');
+        el.uid = document.getElementById('dbg-uid');
+        el.proj = document.getElementById('dbg-proj');
+        el.copyBtn = document.getElementById('dbg-copy');
+        el.clearBtn = document.getElementById('dbg-clear');
+        el.seedChk = document.getElementById('dbg-seed');
+        el.testBtn = document.getElementById('dbg-test');
+        el.handle = document.getElementById('dbg-handle');
+        el.panel = document.getElementById('dbg-panel');
+        el.time = document.getElementById('dbg-time');
+        if (el.copyBtn) el.copyBtn.onclick = copy;
+        if (el.clearBtn) el.clearBtn.onclick = clear;
+        if (el.handle) el.handle.onclick = () => {
+          if (!el.panel) return;
+          const isOpen = el.panel.style.display !== 'none';
+          el.panel.style.display = isOpen ? 'none' : 'block';
+        };
+        if (el.time) {
+          el.time.textContent = new Date().toISOString();
+          setInterval(() => { if (el.time) el.time.textContent = new Date().toISOString(); }, 1000);
+        }
+      };
+      return { push, copy, clear, setUid, setProj, mount, seedAfterCreate };
+    })();
+    window.__adminDbg = dbg;
+    window.addEventListener('DOMContentLoaded', () => { dbg.mount(); });
+  </script>
   <script src="/jamlog.js"></script>
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
@@ -95,15 +181,43 @@
     import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug } from "/common.js";
     import {
       collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
-      doc, updateDoc, deleteDoc, setDoc
+      doc, updateDoc, deleteDoc, setDoc, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { awaitAuthReady, isAuthed } from "/auth.js";
 
     if (window.jamlog && isDebug()) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'ADMIN' });
     }
 
+    __adminDbg.setProj(window.__FIREBASE_PROJECT_ID__ || app.options.projectId);
+    __adminDbg.push('app.start', { url: location.href });
+
+    const auth = getAuth(app);
+    __adminDbg.push('auth.signInAnonymously.start');
+    onAuthStateChanged(auth, (u) => {
+      if (u) {
+        __adminDbg.setUid(u.uid);
+        __adminDbg.push('auth.ready', { uid: u.uid });
+      } else {
+        signInAnonymously(auth)
+          .then(() => __adminDbg.push('auth.signInAnonymously.ok'))
+          .catch((e) => __adminDbg.push('auth.signInAnonymously.fail', { code: e?.code, message: e?.message }));
+      }
+    });
+
     renderCurrentPlayerControls("you");
+
+    const testBtn = document.getElementById('dbg-test');
+    testBtn?.addEventListener('click', async () => {
+      __adminDbg.push('health.write.start');
+      try {
+        await setDoc(doc(db, 'health', 'adminWriteTest'), { ts: serverTimestamp() });
+        __adminDbg.push('health.write.ok');
+      } catch (e) {
+        __adminDbg.push('health.write.fail', { code: e?.code, message: e?.message });
+      }
+    });
 
     // ----- players / tables shared auth gate -----
     const playersCol = collection(db, "players");
@@ -198,6 +312,7 @@
 
     // ----- tables -----
     tBtn?.addEventListener("click", async () => {
+      __adminDbg.push('admin.create.click');
       if (!isAuthed()) {
         tStatus.textContent = "Auth not ready";
         setTimeout(() => (tStatus.textContent = ""), 2000);
@@ -223,54 +338,66 @@
       if (window.jamlog) window.jamlog.push('admin.create.start', { numericOk, keys: ['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn'] });
 
       tStatus.textContent = "Creating…"; tBtn.disabled = true;
+      const payload = {
+        name,
+        active: true,
+        createdAt: serverTimestamp(),
+        maxSeats,
+        activeSeatCount: 0,
+        gameType: 'holdem',
+        blinds: { sbCents: sbC, bbCents: bbC },
+        buyIn: { minCents: minC, maxCents: maxC, defaultCents: defC },
+      };
+      const types = {};
+      Object.keys(payload).forEach(k => {
+        const v = payload[k];
+        types[k] = (v && v._methodName === 'FieldValue.serverTimestamp') ? 'serverTimestamp' : (typeof v === 'object' ? 'object' : typeof v);
+      });
+      __adminDbg.push('admin.create.payload.shape', { keys: Object.keys(payload), types });
+      if (window.jamlog) window.jamlog.push('admin.create.payload', types);
+
+      __adminDbg.push('admin.create.request.start');
+      let tableRef;
       try {
-        const payload = {
-          name,
-          active: true,
-          createdAt: serverTimestamp(),
-          maxSeats,
-          activeSeatCount: 0,
-          gameType: 'holdem',
-          blinds: { sbCents: sbC, bbCents: bbC },
-          buyIn: { minCents: minC, maxCents: maxC, defaultCents: defC },
-        };
-        if (window.jamlog) {
-          const shape = {};
-          Object.keys(payload).forEach(k => {
-            const v = payload[k];
-            shape[k] = typeof v === 'object' ? 'object' : typeof v;
-          });
-          window.jamlog.push('admin.create.payload', shape);
-        }
-        const tableRef = await addDoc(tablesCol, payload);
-
-        (async () => {
-          try {
-            const seatsCol = collection(tableRef, "seats");
-            const seatWrites = [];
-            for (let i = 0; i < maxSeats; i++) {
-              seatWrites.push(setDoc(doc(seatsCol, String(i)), {
-                seatIndex: i,
-                occupiedBy: null,
-                displayName: null,
-                sittingOut: false,
-                stackCents: null,
-                updatedAt: serverTimestamp(),
-              }));
-            }
-            await Promise.all(seatWrites);
-            if (window.jamlog) window.jamlog.push('admin.seats.seed.ok', { count: seatWrites.length });
-          } catch (err) {
-            if (window.jamlog) window.jamlog.push('admin.seats.seed.fail', { code: err?.code, message: err?.message });
-          }
-        })();
-
+        tableRef = await addDoc(tablesCol, payload);
+        __adminDbg.push('admin.create.ok', { tableId: tableRef.id });
         if (window.jamlog) window.jamlog.push('admin.create.ok', { tableId: tableRef.id });
         tStatus.textContent = `Table created: ${tableRef.id}`;
         tName.value = "";
       } catch (e) {
+        __adminDbg.push('admin.create.fail', { code: e?.code, message: e?.message });
         if (window.jamlog) window.jamlog.push('admin.create.fail', { code: e?.code, message: e?.message });
         tStatus.textContent = `Error: ${e?.code || ''} ${e?.message || e}`;
+        tBtn.disabled = false;
+        return;
+      }
+
+      if (!__adminDbg.seedAfterCreate()) {
+        __adminDbg.push('admin.seats.seed.skipped');
+        tBtn.disabled = false;
+        return;
+      }
+
+      __adminDbg.push('admin.seats.seed.start', { tableId: tableRef.id, maxSeats });
+      try {
+        const batch = writeBatch(db);
+        for (let i = 0; i < maxSeats; i++) {
+          const sref = doc(db, 'tables', tableRef.id, 'seats', String(i));
+          batch.set(sref, {
+            seatIndex: i,
+            occupiedBy: null,
+            displayName: null,
+            sittingOut: false,
+            stackCents: null,
+            updatedAt: serverTimestamp()
+          }, { merge: false });
+        }
+        await batch.commit();
+        __adminDbg.push('admin.seats.seed.ok', { count: maxSeats });
+        if (window.jamlog) window.jamlog.push('admin.seats.seed.ok', { count: maxSeats });
+      } catch (e) {
+        __adminDbg.push('admin.seats.seed.fail', { code: e?.code, message: e?.message });
+        if (window.jamlog) window.jamlog.push('admin.seats.seed.fail', { code: e?.code, message: e?.message });
       } finally {
         tBtn.disabled = false;
       }
