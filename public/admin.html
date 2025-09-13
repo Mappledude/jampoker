@@ -93,7 +93,7 @@
   <script type="module">
     import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls } from "/common.js";
     import {
-      collection, addDoc, serverTimestamp, query, orderBy, onSnapshot,
+      collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
       doc, updateDoc, deleteDoc, setDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -273,32 +273,44 @@
       }
     };
 
-    onSnapshot(query(tablesCol, orderBy("createdAt", "desc")), (snap) => {
-      snap.docChanges().forEach((change) => {
-        const id = change.doc.id;
-        if (change.type === "removed") {
-          delete tablesData[id];
-          if (seatUnsubs[id]) seatUnsubs[id]();
-          delete seatUnsubs[id];
-          delete seatCounts[id];
-        } else {
-          tablesData[id] = change.doc.data();
-          if (!seatUnsubs[id]) {
-            const seatsCol = collection(doc(db, "tables", id), "seats");
-            seatUnsubs[id] = onSnapshot(seatsCol, (s) => {
-              let cnt = 0;
-              s.forEach((docSnap) => {
-                const sd = docSnap.data();
-                if (sd.occupiedBy) cnt++;
+    onSnapshot(
+      query(tablesCol, where("active", "==", true), orderBy("createdAt", "desc")),
+      (snap) => {
+        snap.docChanges().forEach((change) => {
+          const id = change.doc.id;
+          if (change.type === "removed") {
+            delete tablesData[id];
+            if (seatUnsubs[id]) seatUnsubs[id]();
+            delete seatUnsubs[id];
+            delete seatCounts[id];
+          } else {
+            tablesData[id] = change.doc.data();
+            if (!seatUnsubs[id]) {
+              const seatsCol = collection(doc(db, "tables", id), "seats");
+              seatUnsubs[id] = onSnapshot(seatsCol, (s) => {
+                let cnt = 0;
+                s.forEach((docSnap) => {
+                  const sd = docSnap.data();
+                  if (sd.occupiedBy) cnt++;
+                });
+                seatCounts[id] = cnt;
+                renderTables();
               });
-              seatCounts[id] = cnt;
-              renderTables();
-            });
+            }
           }
+        });
+        renderTables();
+      },
+      (err) => {
+        const loadingEl = document.getElementById("tables-loading");
+        if (loadingEl) {
+          const msg = err?.code === "permission-denied"
+            ? "Cannot load tables: permission denied."
+            : "Error loading tables: " + (err?.message || err);
+          loadingEl.textContent = msg;
         }
-      });
-      renderTables();
-    });
+      }
+    );
 
     tablesBody?.addEventListener("click", async (e) => {
       if (!e.target.classList.contains("archive-table")) return;
