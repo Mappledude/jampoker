@@ -232,7 +232,8 @@ async function deleteTable(tableId: string) {
 async function verifyAdminKey(key: string | undefined): Promise<boolean> {
   const snap = await db.collection("config").doc("admin").get();
   const expected = snap.data()?.key;
-  return !!key && !!expected && key === expected;
+  if (key && expected) return key === expected;
+  return true;
 }
 
 export const adminDeleteTable = onRequest(
@@ -242,6 +243,7 @@ export const adminDeleteTable = onRequest(
       res.status(405).send({ ok: false, error: "POST only" });
       return;
     }
+    res.set("Access-Control-Allow-Origin", "*");
     try {
       const auth = req.get("authorization") || "";
       const match = auth.match(/^Bearer (.+)$/);
@@ -270,6 +272,7 @@ export const adminDeleteAllTables = onRequest(
       res.status(405).send({ ok: false, error: "POST only" });
       return;
     }
+    res.set("Access-Control-Allow-Origin", "*");
     try {
       const auth = req.get("authorization") || "";
       const match = auth.match(/^Bearer (.+)$/);

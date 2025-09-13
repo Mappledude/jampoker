@@ -72,7 +72,7 @@
       let variantHtml = "";
       if (cp && cp.id === d.nextDealerId) {
         const selVal = d.nextVariantId || "holdem";
-        variantHtml = ` <select class="variant-select" data-id="${id}">
+        variantHtml = ` <select class="variant-select" data-table-id="${id}">
           <option value="holdem" ${selVal === 'holdem' ? 'selected' : ''}>Hold'em</option>
           <option value="omaha" ${selVal === 'omaha' ? 'selected' : ''}>Omaha</option>
         </select>`;
@@ -90,9 +90,9 @@
               <div class="small">${nextDealerLine}</div>
             </div>
             <div>
-              <a href="/table.html?id=${id}" class="small" style="display:inline-block;margin-bottom:8px;color:#38bdf8;">Open Table</a><br/>
-              <button class="join-btn" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;">Join</button>
-              <button class="leave-btn" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#ef4444;color:white;font-weight:700;">Leave</button>
+              <a class="open-table small" href="/table.html?id=${encodeURIComponent(id)}" style="display:inline-block;margin-bottom:8px;color:#38bdf8;">Open Table</a><br/>
+              <button class="join-btn" data-table-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;">Join</button>
+              <button class="leave-btn" data-table-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#ef4444;color:white;font-weight:700;">Leave</button>
             </div>
           </div>
           <div class="small" style="margin-top:8px;">Seated:</div>
@@ -100,7 +100,7 @@
           <div class="join-panel" id="join-${id}" style="display:none;margin-top:10px;">
             <div class="small">Choose your buy-in (min–max):</div>
             <input id="amount-${id}" type="number" step="0.01" style="width:160px;padding:8px;border-radius:10px;border:1px solid #334155;background:#0b1220;color:#e5e7eb" />
-            <button class="confirm-join" data-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;">Confirm</button>
+            <button class="confirm-join" data-table-id="${id}" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;">Confirm</button>
             <span class="join-status small" id="status-${id}" style="margin-left:8px;"></span>
           </div>
           <div class="dbg" id="dbg-${id}" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:4px;"></div>
@@ -192,11 +192,44 @@
     document.addEventListener('change', async (e) => {
       const sel = e.target.closest('.variant-select');
       if (sel) {
-        const tableId = sel.getAttribute('data-id');
+      const tableId = sel.dataset.tableId;
         try { await updateDoc(doc(db, 'tables', tableId), { nextVariantId: sel.value }); }
         catch (err) { console.error(err); }
       }
     });
+
+    async function joinTable(tableId, cp, amountCents) {
+      await runTransaction(db, async (tx) => {
+        const tableRef = doc(db, "tables", tableId);
+        const playerRef = doc(db, "players", cp.id);
+        const seatRef = doc(db, "tables", tableId, "seats", cp.id);
+
+        const [tableSnap, playerSnap, seatSnap] = await Promise.all([
+          tx.get(tableRef), tx.get(playerRef), tx.get(seatRef)
+        ]);
+        if (!tableSnap.exists()) throw new Error("Table not found.");
+        if (!playerSnap.exists()) throw new Error("Player not found.");
+
+        const t = tableSnap.data();
+        const p = playerSnap.data();
+
+        if (amountCents < (t.minBuyInCents||0) || amountCents > (t.maxBuyInCents||0))
+          throw new Error("Amount must be between min and max buy-in.");
+        if ((p.walletCents||0) < amountCents)
+          throw new Error("Not enough wallet balance.");
+        if (seatSnap.exists())
+          throw new Error("You are already seated at this table.");
+
+        tx.update(playerRef, { walletCents: (p.walletCents||0) - amountCents });
+        tx.set(seatRef, {
+          playerId: cp.id,
+          playerName: cp.name || p.name || "",
+          chipStackCents: amountCents,
+          satAt: serverTimestamp(),
+          active: true
+        });
+      });
+    }
 
     // Click handlers (join/leave)
     document.addEventListener("click", async (e) => {
@@ -206,7 +239,7 @@
       const cp = getCurrentPlayer();
 
       if (joinBtn) {
-        const id = joinBtn.getAttribute("data-id");
+        const id = joinBtn.dataset.tableId;
         const panel = document.getElementById(`join-${id}`);
         // prefill default from table
         const tableSnap = await getDoc(doc(db, "tables", id));
@@ -219,44 +252,14 @@
 
       if (confirmBtn) {
         if (!cp) { alert("Select a Current Player first."); return; }
-        const tableId = confirmBtn.getAttribute("data-id");
+        const tableId = confirmBtn.dataset.tableId;
         const status = document.getElementById(`status-${tableId}`);
         status.textContent = "Joining…";
 
+        const amountCents = parseDollarsToCents(document.getElementById(`amount-${tableId}`).value);
+        if (amountCents === null) { status.textContent = "Error: Enter a valid amount."; return; }
         try {
-          await runTransaction(db, async (tx) => {
-            const tableRef = doc(db, "tables", tableId);
-            const playerRef = doc(db, "players", cp.id);
-            const seatRef = doc(db, "tables", tableId, "seats", cp.id);
-
-            const [tableSnap, playerSnap, seatSnap] = await Promise.all([
-              tx.get(tableRef), tx.get(playerRef), tx.get(seatRef)
-            ]);
-            if (!tableSnap.exists()) throw new Error("Table not found.");
-            if (!playerSnap.exists()) throw new Error("Player not found.");
-
-            const t = tableSnap.data();
-            const p = playerSnap.data();
-            const amountCents = parseDollarsToCents(document.getElementById(`amount-${tableId}`).value);
-            if (amountCents === null) throw new Error("Enter a valid amount.");
-
-            if (amountCents < (t.minBuyInCents||0) || amountCents > (t.maxBuyInCents||0))
-              throw new Error("Amount must be between min and max buy-in.");
-            if ((p.walletCents||0) < amountCents)
-              throw new Error("Not enough wallet balance.");
-            if (seatSnap.exists())
-              throw new Error("You are already seated at this table.");
-
-            // deduct wallet, create seat
-            tx.update(playerRef, { walletCents: (p.walletCents||0) - amountCents });
-            tx.set(seatRef, {
-              playerId: cp.id,
-              playerName: cp.name || p.name || "",
-              chipStackCents: amountCents,
-              satAt: serverTimestamp(),
-              active: true
-            });
-          });
+          await joinTable(tableId, cp, amountCents);
           status.textContent = "Joined ✔";
         } catch (err) {
           status.textContent = "Error: " + (err?.message || err);
@@ -266,7 +269,7 @@
 
       if (leaveBtn) {
         if (!cp) { alert("Select a Current Player first."); return; }
-        const tableId = leaveBtn.getAttribute("data-id");
+        const tableId = leaveBtn.dataset.tableId;
 
         const ok = confirm("Leave this table and return remaining chips to your wallet?");
         if (!ok) return;

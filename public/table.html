@@ -24,7 +24,7 @@
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel } from "/common.js";
+    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug } from "/common.js";
     import {
       doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -80,6 +80,7 @@
       const seatsRef = collection(db, 'tables', tableId, 'seats');
       onSnapshot(query(seatsRef, orderBy('seatNum', 'asc')), (snap) => {
         seatData = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        showSeatsDebug(tableId, snap.docs);
         renderSeats();
         renderHand();
         updateDebug();

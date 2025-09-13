@@ -69,7 +69,6 @@
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <h2 style="margin-top:0;">Tables</h2>
         <div style="display:flex;gap:8px;align-items:center;">
-          <button id="admin-key-btn" class="small" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e5e7eb;cursor:pointer"></button>
           <button id="delete-all-tables" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-weight:700;cursor:pointer">Delete ALL tables</button>
         </div>
       </div>
@@ -210,45 +209,16 @@
     });
 
     const tablesBody = document.getElementById("tables-body");
-    const adminKeyBtn = document.getElementById("admin-key-btn");
     const deleteAllBtn = document.getElementById("delete-all-tables");
-
-    const getAdminKey = () => localStorage.getItem("adminKey") || "";
-    const updateKeyBtn = () => {
-      adminKeyBtn.textContent = getAdminKey() ? "Change Key" : "Set Admin Key";
-    };
-    const ensureKey = async () => {
-      let k = getAdminKey();
-      if (!k) {
-        k = prompt("Enter admin key")?.trim() || "";
-        if (k) localStorage.setItem("adminKey", k);
-      }
-      updateKeyBtn();
-      return k;
-    };
-    adminKeyBtn?.addEventListener("click", () => {
-      const k = prompt("Enter admin key")?.trim() || "";
-      if (k) localStorage.setItem("adminKey", k);
-      else localStorage.removeItem("adminKey");
-      updateKeyBtn();
-    });
-    updateKeyBtn();
 
     deleteAllBtn?.addEventListener("click", async () => {
       const conf = prompt("Type DELETE ALL") === "DELETE ALL";
       if (!conf) return;
-      const key = await ensureKey();
-      if (!key) return;
       try {
-        const res = await fetch("/adminDeleteAllTables", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: "Bearer " + key,
-          },
-        });
+        const res = await fetch("/adminDeleteAllTables", { method: "POST" });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "Error");
+        alert("All tables deleted.");
       } catch (err) {
         alert("Error: " + (err?.message || err));
       }
@@ -308,19 +278,15 @@
       const id = row.getAttribute("data-id");
       const conf = prompt("Type DELETE to remove this table and its hands/seats.") === "DELETE";
       if (!conf) return;
-      const key = await ensureKey();
-      if (!key) return;
       try {
         const res = await fetch("/adminDeleteTable", {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            Authorization: "Bearer " + key,
-          },
+          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ tableId: id }),
         });
         const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "Error");
+        alert("Table deleted.");
       } catch (err) {
         alert("Error: " + (err?.message || err));
       }
