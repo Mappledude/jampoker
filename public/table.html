@@ -107,15 +107,20 @@
     function renderTableInfo() {
       if (!tableData) { infoEl.textContent = ''; return; }
       const t = tableData;
-      const blindStr = `${dollars(t.smallBlindCents || 0)}/${dollars(t.bigBlindCents || 0)}`;
-      const rangeStr = `${dollars(t.minBuyInCents || 0)}–${dollars(t.maxBuyInCents || 0)} (default ${dollars(t.defaultBuyInCents || 0)})`;
+      const sb = t?.blinds?.sbCents ?? t.smallBlindCents ?? 0;
+      const bb = t?.blinds?.bbCents ?? t.bigBlindCents ?? 0;
+      const minB = t?.buyIn?.minCents ?? t.minBuyInCents ?? 0;
+      const maxB = t?.buyIn?.maxCents ?? t.maxBuyInCents ?? 0;
+      const defB = t?.buyIn?.defaultCents ?? t.defaultBuyInCents ?? 0;
+      const blindStr = `${dollars(sb)}/${dollars(bb)}`;
+      const rangeStr = `${dollars(minB)}–${dollars(maxB)} (default ${dollars(defB)})`;
       const derivedSeatCount = seatData.filter(s => s.occupiedBy).length;
       const activeSeatCount = t.activeSeatCount ?? 0;
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
         <div class="small">Buy-in: ${rangeStr}</div>
-        <div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>
+        <div class="small">Seats: ${derivedSeatCount} (active: ${activeSeatCount}) / ${t.maxSeats || 0}</div>
       `;
     }
 

@@ -15,7 +15,7 @@ service cloud.firestore {
       allow create, delete: if true;
 
       // Allow client to change nextVariantId, or admin to archive.
-      allow update: if request.resource.data.diff(resource.data).changedKeys().hasOnly(['nextVariantId']) ||
+      allow update: if request.resource.data.diff(resource.data).changedKeys().hasOnly(['nextVariantId','activeSeatCount']) ||
         (request.resource.data.diff(resource.data).changedKeys().hasOnly(['active', 'deletedAt']) &&
          resource.data.active == true && request.resource.data.active == false);
     }

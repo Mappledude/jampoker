@@ -44,8 +44,13 @@
     const handUnsubs = new Map();
 
     const renderTable = (id, d, seatsHtml, seatCount, hand, seatMap) => {
-      const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
-      const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
+      const sb = d?.blinds?.sbCents ?? d.smallBlindCents ?? 0;
+      const bb = d?.blinds?.bbCents ?? d.bigBlindCents ?? 0;
+      const minB = d?.buyIn?.minCents ?? d.minBuyInCents ?? 0;
+      const maxB = d?.buyIn?.maxCents ?? d.maxBuyInCents ?? 0;
+      const defB = d?.buyIn?.defaultCents ?? d.defaultBuyInCents ?? 0;
+      const blindStr = `${dollars(sb)}/${dollars(bb)}`;
+      const rangeStr = `${dollars(minB)}–${dollars(maxB)} (default ${dollars(defB)})`;
       let banner;
       let potLine = "";
       let stageLine = "";
@@ -84,7 +89,7 @@
             <div>
               <div style="font-weight:700">${d.name || "(no name)"}</div>
               <div class="small">Code: <code>${id}</code></div>
-              <div class="small">Seats: ${d.activeSeatCount || 0} / ${d.maxSeats || 0}</div>
+              <div class="small">Seats: ${seatCount === null ? (d.activeSeatCount || 0) : `${seatCount} (active: ${d.activeSeatCount || 0})`} / ${d.maxSeats || 0}</div>
               <div class="small">Blinds: ${blindStr}</div>
               <div class="small">Buy-in: ${rangeStr}</div>
               <div class="small" style="margin-top:4px;">${banner}</div>
@@ -135,66 +140,78 @@
       blocks.forEach(updateDebug);
     };
 
-    const q = query(tablesCol, where('active', '==', true), orderBy('createdAt', 'desc'));
-    debugLog('lobby.query.started');
-    onSnapshot(q, (snap) => {
-      debugLog('lobby.tablesSnapshot', snap.size);
-      blocks = [];
-      seatUnsubs.forEach(u => u());
-      seatUnsubs.clear();
-      handUnsubs.forEach(u => u());
-      handUnsubs.clear();
+    function startTablesListener(useFallback = false) {
+      const q = useFallback
+        ? query(tablesCol, where('active', '==', true))
+        : query(tablesCol, where('active', '==', true), orderBy('createdAt', 'desc'));
+      debugLog(useFallback ? 'lobby.query.started.fallback' : 'lobby.query.started');
+      onSnapshot(q, (snap) => {
+        debugLog('lobby.tablesSnapshot', snap.size);
+        blocks = [];
+        seatUnsubs.forEach(u => u());
+        seatUnsubs.clear();
+        handUnsubs.forEach(u => u());
+        handUnsubs.clear();
 
-      if (snap.empty) debugLog('lobby.query.empty (0 docs)');
-      else debugLog('lobby.query.ok', { count: snap.size });
+        const docs = [...snap.docs].sort((a,b) => (b.data()?.createdAt?.toMillis?.() || 0) - (a.data()?.createdAt?.toMillis?.() || 0));
+        if (snap.empty) debugLog('lobby.query.empty (0 docs)');
+        else debugLog('lobby.query.ok', { count: snap.size });
 
-      snap.forEach(docSnap => {
-        const id = docSnap.id;
-        const d = docSnap.data();
-        blocks.push({ id, data: d, seatsHtml: "Loading…", seatCount: 0, hand: null, seatMap: [] });
-        const seatsRef = subcol(doc(db, "tables", id), "seats");
-        const unsubSeats = onSnapshot(seatsRef, (seatSnap) => {
-          debugLog('lobby.seatsSnapshot', id, seatSnap.size);
-          const seated = [];
-          const seatMap = [];
-          let activeCount = 0;
-          seatSnap.forEach((s) => {
-            const sd = s.data();
-            if (sd.occupiedBy) {
-              seated.push(`<div style=\\"display:flex;justify-content:space-between;\\"><span>${sd.displayName || sd.occupiedBy}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
-              seatMap.push({ seatNum: sd.seatIndex, playerName: sd.displayName || sd.occupiedBy });
-              activeCount++;
-            }
-          });
-          const idx = blocks.findIndex((b) => b.id === id);
-          if (idx >= 0) {
-            blocks[idx].seatsHtml = seated.join("") || "(none yet)";
-            blocks[idx].seatCount = activeCount;
-            blocks[idx].seatMap = seatMap;
-            renderAll();
-          }
-        });
-        seatUnsubs.set(id, unsubSeats);
-
-        if (d.currentHandId) {
-          const handRef = doc(db, "tables", id, "hands", d.currentHandId);
-          const unsubHand = onSnapshot(handRef, (handSnap) => {
-            const idx = blocks.findIndex(b => b.id === id);
+        docs.forEach(docSnap => {
+          const id = docSnap.id;
+          const d = docSnap.data();
+          blocks.push({ id, data: d, seatsHtml: "Loading…", seatCount: null, hand: null, seatMap: [] });
+          const seatsRef = subcol(doc(db, "tables", id), "seats");
+          const unsubSeats = onSnapshot(seatsRef, (seatSnap) => {
+            debugLog('lobby.seatsSnapshot', id, seatSnap.size);
+            const seated = [];
+            const seatMap = [];
+            let activeCount = 0;
+            seatSnap.forEach((s) => {
+              const sd = s.data();
+              if (sd.occupiedBy) {
+                seated.push(`<div style=\\"display:flex;justify-content:space-between;\\"><span>${sd.displayName || sd.occupiedBy}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
+                seatMap.push({ seatNum: sd.seatIndex, playerName: sd.displayName || sd.occupiedBy });
+                activeCount++;
+              }
+            });
+            const idx = blocks.findIndex((b) => b.id === id);
             if (idx >= 0) {
-              blocks[idx].hand = handSnap.data();
+              blocks[idx].seatsHtml = seated.join("") || "(none yet)";
+              blocks[idx].seatCount = activeCount;
+              blocks[idx].seatMap = seatMap;
               renderAll();
             }
           });
-          handUnsubs.set(id, unsubHand);
+          seatUnsubs.set(id, unsubSeats);
+
+          if (d.currentHandId) {
+            const handRef = doc(db, "tables", id, "hands", d.currentHandId);
+            const unsubHand = onSnapshot(handRef, (handSnap) => {
+              const idx = blocks.findIndex(b => b.id === id);
+              if (idx >= 0) {
+                blocks[idx].hand = handSnap.data();
+                renderAll();
+              }
+            });
+            handUnsubs.set(id, unsubHand);
+          }
+        });
+
+        renderAll();
+      }, (err) => {
+        if (err.code === 'failed-precondition' && !useFallback) {
+          debugLog('lobby.query.fallback.index_missing');
+          startTablesListener(true);
+        } else {
+          if (err.code === 'permission-denied') debugLog('lobby.query.permissionDenied');
+          else debugLog('lobby.query.error', err);
+          listEl.textContent = err.code === 'permission-denied' ? 'Cannot load tables: permission denied.' : 'Error loading tables.';
         }
       });
+    }
 
-      renderAll();
-    }, (err) => {
-      if (err.code === 'permission-denied') debugLog('lobby.query.permissionDenied');
-      else if (err.code === 'failed-precondition') debugLog('lobby.query.indexError');
-      else debugLog('lobby.query.error', err);
-    });
+    startTablesListener();
 
     // re-render when current player changes
     document.addEventListener('change', (e) => {
@@ -224,8 +241,10 @@
 
         const t = tableSnap.data();
         const p = playerSnap.data();
+        const minB = t?.buyIn?.minCents ?? t.minBuyInCents ?? 0;
+        const maxB = t?.buyIn?.maxCents ?? t.maxBuyInCents ?? 0;
 
-        if (amountCents < (t.minBuyInCents || 0) || amountCents > (t.maxBuyInCents || 0))
+        if (amountCents < minB || amountCents > maxB)
           throw new Error("Amount must be between min and max buy-in.");
         if ((p.walletCents || 0) < amountCents)
           throw new Error("Not enough wallet balance.");
@@ -280,8 +299,9 @@
         // prefill default from table
         const tableSnap = await getDoc(doc(db, "tables", id));
         const t = tableSnap.data();
+        const def = t?.buyIn?.defaultCents ?? t.defaultBuyInCents ?? 0;
         const input = document.getElementById(`amount-${id}`);
-        input.value = (t?.defaultBuyInCents ? (t.defaultBuyInCents/100).toFixed(2) : "0.00");
+        input.value = (def/100).toFixed(2);
         panel.style.display = "block";
         return;
       }
