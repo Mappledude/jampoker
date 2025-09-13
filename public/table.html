@@ -17,14 +17,14 @@
     <div id="error" class="card" style="display:none;"></div>
     <div id="table-info" class="card" style="margin-top:16px;"></div>
     <div id="current-hand" class="card" style="margin-top:16px;"></div>
-    <div id="action-panel" class="card" style="display:none;margin-top:16px;"></div>
     <div id="seats" class="card" style="margin-top:16px;"></div>
-    <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
   </div>
+  <div id="player-board" class="card" style="display:none;position:fixed;left:50%;bottom:0;transform:translateX(-50%);min-width:260px;"></div>
+  <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug } from "/common.js";
+    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
       doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -39,8 +39,8 @@
     const errorEl = document.getElementById('error');
     const infoEl = document.getElementById('table-info');
     const handEl = document.getElementById('current-hand');
-    const actionEl = document.getElementById('action-panel');
     const seatsEl = document.getElementById('seats');
+    const boardEl = document.getElementById('player-board');
     const debugBox = document.getElementById('debug-box');
 
     let tableData = null;
@@ -54,11 +54,20 @@
     } else {
       const tableRef = doc(db, 'tables', tableId);
       onSnapshot(tableRef, (snap) => {
-        if (!snap.exists()) {
+        debugLog('table.tableSnapshot', snap.exists());
+        if (!snap.exists() || snap.data()?.active === false) {
           errorEl.style.display = 'block';
-          errorEl.innerHTML = '<h1>Table not found</h1><a href="/lobby.html">Back to Lobby</a>';
+          const msg = !snap.exists() ? 'Table not found' : 'Table archived';
+          errorEl.innerHTML = `<h1>${msg}</h1><a href="/lobby.html">Back to Lobby</a>`;
+          infoEl.style.display = 'none';
+          handEl.style.display = 'none';
+          seatsEl.style.display = 'none';
+          boardEl.style.display = 'none';
           return;
         }
+        infoEl.style.display = '';
+        handEl.style.display = '';
+        seatsEl.style.display = '';
         tableData = { id: snap.id, ...snap.data() };
         renderTableInfo();
         if (unsubHand) unsubHand();
@@ -74,19 +83,26 @@
           renderHand();
           updateDebug();
         }
+        renderPlayerBoard();
         updateDebug();
       });
 
       const seatsRef = collection(db, 'tables', tableId, 'seats');
       onSnapshot(query(seatsRef, orderBy('seatIndex', 'asc')), (snap) => {
+        debugLog('table.seatsSnapshot', snap.size);
         seatData = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
         showSeatsDebug(tableId, snap.docs);
         renderSeats();
         renderHand();
         renderTableInfo();
+        renderPlayerBoard();
         updateDebug();
       });
     }
+
+    document.addEventListener('change', (e) => {
+      if (e.target.id === 'cp-select') renderPlayerBoard();
+    });
 
     function renderTableInfo() {
       if (!tableData) { infoEl.textContent = ''; return; }
@@ -107,12 +123,12 @@
       if (!handData) {
         const seatCount = seatData.filter(s => s.occupiedBy).length;
         handEl.innerHTML = seatCount < 2 ? 'Waiting for players…' : 'Waiting for next dealer’s choice…';
-        actionEl.style.display = 'none';
+        renderPlayerBoard();
         return;
       }
       if (handData.status === 'ended') {
         handEl.textContent = handData.showdownPending ? 'Showdown pending — pot held' : 'Hand ended — waiting for next hand…';
-        actionEl.style.display = 'none';
+        renderPlayerBoard();
         return;
       }
       const h = handData;
@@ -149,7 +165,7 @@
         <div class="small" style="margin-top:4px;">Action: ${actorName}</div>
         ${debugLine}
       `;
-      renderActions();
+      renderPlayerBoard();
     }
 
     function renderSeats() {
@@ -160,52 +176,57 @@
     }
 
     let intentPending = false;
-    async function renderActions() {
+    async function renderPlayerBoard() {
       const current = getCurrentPlayer();
-      if (!handData || !current) { actionEl.style.display = 'none'; return; }
-      const folded = handData.folded || {};
-      const currentSeat = seatData.find(s => s.occupiedBy === current.id);
-      const isActor = currentSeat && currentSeat.seatIndex === handData.actorSeatNum && !folded[current.id] && (currentSeat.stackCents > 0);
-      if (!isActor) { actionEl.style.display = 'none'; return; }
-
-      const toCall = handData.toCallCents || 0;
-      const minRaise = handData.minRaiseCents || 0;
+      if (!current) { boardEl.style.display = 'none'; return; }
+      const seat = seatData.find(s => s.occupiedBy === current.id);
+      boardEl.style.display = 'block';
+      if (!seat) {
+        boardEl.innerHTML = '<div class="small" style="text-align:center;">Not seated — pick a seat to play</div>';
+        return;
+      }
+      const folded = handData?.folded || {};
+      const isActor = handData && seat.seatIndex === handData.actorSeatNum && !folded[current.id] && (seat.stackCents > 0);
+      const toCall = handData?.toCallCents || 0;
+      const minRaise = handData?.minRaiseCents || 0;
       const callLabel = toCall > 0 ? `Call ${dollars(toCall)}` : 'Check';
       const raiseLabel = `Min-Raise ${dollars(minRaise)}`;
-
-      actionEl.style.display = 'block';
-      actionEl.innerHTML = `
-        <div style="display:flex; gap:8px; flex-wrap:wrap;">
+      const actionsHtml = isActor ? `
+        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:8px;">
           <button id="btn-fold">Fold</button>
           <button id="btn-call">${callLabel}</button>
           <button id="btn-raise">${raiseLabel}</button>
         </div>
+      ` : '<div class="small" style="text-align:center;margin-top:8px;">Waiting…</div>';
+      boardEl.innerHTML = `
+        <div style="display:flex; justify-content:center; gap:8px;">
+          <span class="card-chip">[ ?? ]</span>
+          <span class="card-chip">[ ?? ]</span>
+        </div>
+        ${actionsHtml}
       `;
-
-      const foldBtn = document.getElementById('btn-fold');
-      const callBtn = document.getElementById('btn-call');
-      const raiseBtn = document.getElementById('btn-raise');
-
-      const disable = (d) => { foldBtn.disabled = callBtn.disabled = raiseBtn.disabled = d; };
-
-      const intentsCol = collection(db, 'tables', tableId, 'hands', tableData.currentHandId, 'intents');
-
-      const send = async (data) => {
-        if (intentPending) return;
-        intentPending = true;
-        disable(true);
-        try {
-          await addDoc(intentsCol, { ...data, createdAt: serverTimestamp() });
-        } catch (e) {
-          console.error(e);
-        }
-        intentPending = false;
-        disable(false);
-      };
-
-      foldBtn.addEventListener('click', () => send({ playerId: current.id, type: 'fold' }));
-      callBtn.addEventListener('click', () => send({ playerId: current.id, type: toCall > 0 ? 'call' : 'check' }));
-      raiseBtn.addEventListener('click', () => send({ playerId: current.id, type: 'raise', amountCents: minRaise }));
+      if (isActor) {
+        const foldBtn = document.getElementById('btn-fold');
+        const callBtn = document.getElementById('btn-call');
+        const raiseBtn = document.getElementById('btn-raise');
+        const disable = (d) => { foldBtn.disabled = callBtn.disabled = raiseBtn.disabled = d; };
+        const intentsCol = collection(db, 'tables', tableId, 'hands', tableData.currentHandId, 'intents');
+        const send = async (data) => {
+          if (intentPending) return;
+          intentPending = true;
+          disable(true);
+          try {
+            await addDoc(intentsCol, { ...data, createdAt: serverTimestamp() });
+          } catch (e) {
+            console.error(e);
+          }
+          intentPending = false;
+          disable(false);
+        };
+        foldBtn.addEventListener('click', () => send({ playerId: current.id, type: 'fold' }));
+        callBtn.addEventListener('click', () => send({ playerId: current.id, type: toCall > 0 ? 'call' : 'check' }));
+        raiseBtn.addEventListener('click', () => send({ playerId: current.id, type: 'raise', amountCents: minRaise }));
+      }
     }
 
     function updateDebug() {

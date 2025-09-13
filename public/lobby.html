@@ -26,7 +26,7 @@
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls, isDebug, setDebug, formatCard, stageLabel } from "/common.js";
+    import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls, isDebug, setDebug, formatCard, stageLabel, debugLog } from "/common.js";
     import {
       collection, query, orderBy, where, onSnapshot, doc, collection as subcol,
       runTransaction, serverTimestamp, increment, getDoc, updateDoc
@@ -83,6 +83,8 @@
           <div style="display:flex;justify-content:space-between;gap:12px;align-items:center;">
             <div>
               <div style="font-weight:700">${d.name || "(no name)"}</div>
+              <div class="small">Code: <code>${id}</code></div>
+              <div class="small">Seats: ${d.activeSeatCount || 0} / ${d.maxSeats || 0}</div>
               <div class="small">Blinds: ${blindStr}</div>
               <div class="small">Buy-in: ${rangeStr}</div>
               <div class="small" style="margin-top:4px;">${banner}</div>
@@ -129,24 +131,30 @@
     };
 
     const renderAll = () => {
-      listEl.innerHTML = blocks.length ? blocks.map(b => renderTable(b.id, b.data, b.seatsHtml, b.seatCount, b.hand, b.seatMap)).join("") : "No active tables.";
+      listEl.innerHTML = blocks.length ? blocks.map(b => renderTable(b.id, b.data, b.seatsHtml, b.seatCount, b.hand, b.seatMap)).join("") : "No active tables yet.";
       blocks.forEach(updateDebug);
     };
 
-    onSnapshot(query(tablesCol, where("active", "!=", false), orderBy("active"), orderBy("createdAt", "desc")), (snap) => {
+    const q = query(tablesCol, where('active', '==', true), orderBy('createdAt', 'desc'));
+    debugLog('lobby.query.started');
+    onSnapshot(q, (snap) => {
+      debugLog('lobby.tablesSnapshot', snap.size);
       blocks = [];
       seatUnsubs.forEach(u => u());
       seatUnsubs.clear();
       handUnsubs.forEach(u => u());
       handUnsubs.clear();
 
+      if (snap.empty) debugLog('lobby.query.empty (0 docs)');
+      else debugLog('lobby.query.ok', { count: snap.size });
+
       snap.forEach(docSnap => {
         const id = docSnap.id;
         const d = docSnap.data();
-        if (!d.active) return;
         blocks.push({ id, data: d, seatsHtml: "Loading…", seatCount: 0, hand: null, seatMap: [] });
         const seatsRef = subcol(doc(db, "tables", id), "seats");
         const unsubSeats = onSnapshot(seatsRef, (seatSnap) => {
+          debugLog('lobby.seatsSnapshot', id, seatSnap.size);
           const seated = [];
           const seatMap = [];
           let activeCount = 0;
@@ -182,6 +190,10 @@
       });
 
       renderAll();
+    }, (err) => {
+      if (err.code === 'permission-denied') debugLog('lobby.query.permissionDenied');
+      else if (err.code === 'failed-precondition') debugLog('lobby.query.indexError');
+      else debugLog('lobby.query.error', err);
     });
 
     // re-render when current player changes

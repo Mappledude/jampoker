@@ -8,13 +8,16 @@ service cloud.firestore {
     }
 
     match /tables/{tableId} {
-      allow read: if true;
+      // Players may read only active tables.
+      allow read: if resource.data.active == true;
 
       // Allow creating/deleting tables from Admin UI (dev phase).
       allow create, delete: if true;
 
-      // Only allow client to change nextVariantId; everything else must stay the same.
-      allow update: if request.resource.data.diff(resource.data).changedKeys().hasOnly(['nextVariantId']);
+      // Allow client to change nextVariantId, or admin to archive.
+      allow update: if request.resource.data.diff(resource.data).changedKeys().hasOnly(['nextVariantId']) ||
+        (request.resource.data.diff(resource.data).changedKeys().hasOnly(['active', 'deletedAt']) &&
+         resource.data.active == true && request.resource.data.active == false);
     }
 
     match /tables/{tableId}/seats/{playerId} {
