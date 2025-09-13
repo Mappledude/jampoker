@@ -1,5 +1,6 @@
 import { app } from "/firebase-init.js";
 import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+import { isDebug } from "/common.js";
 
 export const auth = getAuth(app);
 let currentUser = auth.currentUser;
@@ -12,9 +13,22 @@ onAuthStateChanged(auth, (u) => {
     currentUser = u;
     ready = true;
     readyResolve(u);
-    console.log(`auth.anon.ready: uid=${u.uid}`);
+    if (window.jamlog && isDebug()) {
+      window.jamlog.setUid(u.uid);
+      window.jamlog.push('auth.ready', { uid: u.uid });
+    }
   } else {
-    signInAnonymously(auth).catch(console.error);
+    if (window.jamlog && isDebug()) window.jamlog.push('auth.signInAnonymously.start');
+    signInAnonymously(auth)
+      .then(() => {
+        if (window.jamlog && isDebug()) window.jamlog.push('auth.signInAnonymously.ok');
+      })
+      .catch((e) => {
+        if (window.jamlog && isDebug()) {
+          window.jamlog.push('auth.signInAnonymously.fail', { code: e?.code, message: e?.message });
+        }
+        console.error(e);
+      });
   }
 });
 

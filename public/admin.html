@@ -88,16 +88,20 @@
       </table>
     </div>
   </div>
-
+  <script src="/jamlog.js"></script>
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
-    import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls } from "/common.js";
+    import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug } from "/common.js";
     import {
       collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
       doc, updateDoc, deleteDoc, setDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady, isAuthed } from "/auth.js";
+
+    if (window.jamlog && isDebug()) {
+      window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'ADMIN' });
+    }
 
     renderCurrentPlayerControls("you");
 
@@ -210,14 +214,17 @@
       const err = (m) => (tStatus.textContent = m);
 
       if (!name) return err("Enter a table name.");
-      if ([minC, defC, maxC, sbC, bbC].some(v => v === null)) return err("Enter valid numbers.");
+      const numericOk = ![minC, defC, maxC, sbC, bbC].some(v => v === null);
+      if (!numericOk) return err("Enter valid numbers.");
       if (minC > maxC) return err("Min buy-in > max.");
       if (defC < minC || defC > maxC) return err("Default must be between min and max.");
       if (sbC <= 0 || bbC <= 0) return err("Blinds must be > 0.");
 
+      if (window.jamlog) window.jamlog.push('admin.create.start', { numericOk, keys: ['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn'] });
+
       tStatus.textContent = "Creating…"; tBtn.disabled = true;
       try {
-        const tableRef = await addDoc(tablesCol, {
+        const payload = {
           name,
           active: true,
           createdAt: serverTimestamp(),
@@ -226,7 +233,16 @@
           gameType: 'holdem',
           blinds: { sbCents: sbC, bbCents: bbC },
           buyIn: { minCents: minC, maxCents: maxC, defaultCents: defC },
-        });
+        };
+        if (window.jamlog) {
+          const shape = {};
+          Object.keys(payload).forEach(k => {
+            const v = payload[k];
+            shape[k] = typeof v === 'object' ? 'object' : typeof v;
+          });
+          window.jamlog.push('admin.create.payload', shape);
+        }
+        const tableRef = await addDoc(tablesCol, payload);
 
         (async () => {
           try {
@@ -243,17 +259,17 @@
               }));
             }
             await Promise.all(seatWrites);
-            console.log('admin.seats.seed.ok', { count: seatWrites.length });
+            if (window.jamlog) window.jamlog.push('admin.seats.seed.ok', { count: seatWrites.length });
           } catch (err) {
-            console.error('admin.seats.seed.fail', { code: err?.code, message: err?.message });
+            if (window.jamlog) window.jamlog.push('admin.seats.seed.fail', { code: err?.code, message: err?.message });
           }
         })();
 
-        console.log('admin.table.create.ok', { id: tableRef.id });
+        if (window.jamlog) window.jamlog.push('admin.create.ok', { tableId: tableRef.id });
         tStatus.textContent = `Table created: ${tableRef.id}`;
         tName.value = "";
       } catch (e) {
-        console.error('admin.table.create.fail', { code: e?.code, message: e?.message });
+        if (window.jamlog) window.jamlog.push('admin.create.fail', { code: e?.code, message: e?.message });
         tStatus.textContent = `Error: ${e?.code || ''} ${e?.message || e}`;
       } finally {
         tBtn.disabled = false;

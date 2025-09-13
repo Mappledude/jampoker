@@ -21,7 +21,7 @@
   </div>
   <div id="player-board" class="card" style="display:none;position:fixed;left:50%;bottom:0;transform:translateX(-50%);min-width:260px;"></div>
   <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
-
+  <script src="/jamlog.js"></script>
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
@@ -31,6 +31,10 @@
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
 
+    if (window.jamlog && isDebug()) {
+      window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'TABLE' });
+    }
+
     renderCurrentPlayerControls("you");
     const debugChip = document.getElementById('debug-chip');
     debugChip.textContent = isDebug() ? 'Debug: ON' : 'Debug: OFF';
@@ -38,6 +42,7 @@
 
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
+    if (window.jamlog) window.jamlog.setTableId(tableId || null);
     const errorEl = document.getElementById('error');
     const infoEl = document.getElementById('table-info');
     const handEl = document.getElementById('current-hand');
@@ -118,6 +123,9 @@
       const rangeStr = `${dollars(minB)}–${dollars(maxB)} (default ${dollars(defB)})`;
       const derivedSeatCount = seatData.filter(s => s.occupiedBy).length;
       const activeSeatCount = t.activeSeatCount ?? 0;
+      if (window.jamlog && derivedSeatCount !== activeSeatCount) {
+        window.jamlog.push('seatcount.status', { activeSeatCount, derived: derivedSeatCount });
+      }
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>

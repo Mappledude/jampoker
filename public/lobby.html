@@ -23,7 +23,7 @@
       <div id="tables" class="small">Loading tables…</div>
     </div>
   </div>
-
+  <script src="/jamlog.js"></script>
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
@@ -33,6 +33,9 @@
       runTransaction, serverTimestamp, increment, getDoc, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
+    if (window.jamlog && isDebug()) {
+      window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'LOBBY' });
+    }
 
     renderCurrentPlayerControls("you");
     const debugChip = document.getElementById('debug-chip');
@@ -146,9 +149,9 @@
       const q = useFallback
         ? query(tablesCol, where('active', '==', true))
         : query(tablesCol, where('active', '==', true), orderBy('createdAt', 'desc'));
-      debugLog(useFallback ? 'lobby.query.started.fallback' : 'lobby.query.started');
+      if (window.jamlog) window.jamlog.push('lobby.query.start');
       onSnapshot(q, (snap) => {
-        debugLog('lobby.tablesSnapshot', snap.size);
+        if (window.jamlog) window.jamlog.push('lobby.query.ok', { count: snap.size });
         blocks = [];
         seatUnsubs.forEach(u => u());
         seatUnsubs.clear();
@@ -156,8 +159,6 @@
         handUnsubs.clear();
 
         const docs = [...snap.docs].sort((a,b) => (b.data()?.createdAt?.toMillis?.() || 0) - (a.data()?.createdAt?.toMillis?.() || 0));
-        if (snap.empty) debugLog('lobby.query.empty (0 docs)');
-        else debugLog('lobby.query.ok', { count: snap.size });
 
         docs.forEach(docSnap => {
           const id = docSnap.id;
@@ -203,11 +204,14 @@
         renderAll();
       }, (err) => {
         if (err.code === 'failed-precondition' && !useFallback) {
-          debugLog('lobby.query.fallback.index_missing');
+          if (window.jamlog) window.jamlog.push('lobby.query.fallback.index_missing');
           startTablesListener(true);
         } else {
-          if (err.code === 'permission-denied') debugLog('lobby.query.permissionDenied');
-          else debugLog('lobby.query.error', err);
+          if (err.code === 'permission-denied') {
+            if (window.jamlog) window.jamlog.push('lobby.query.permission_denied');
+          } else {
+            if (window.jamlog) window.jamlog.push('lobby.query.error', { code: err?.code, message: err?.message });
+          }
           listEl.textContent = err.code === 'permission-denied' ? 'Cannot load tables: permission denied.' : 'Error loading tables.';
         }
       });
@@ -231,6 +235,7 @@
 
     async function joinTable(tableId, cp, amountCents) {
       await awaitAuthReady();
+      if (window.jamlog) window.jamlog.push('seat.tx.claim.start', { tableId });
       let seatIndex = -1;
       try {
         await runTransaction(db, async (tx) => {
@@ -289,9 +294,9 @@
           });
           tx.update(tableRef, { activeSeatCount: increment(1) });
         });
-        debugLog('seat.tx.claim.ok', { seatIndex, uid: cp.id });
+        if (window.jamlog) window.jamlog.push('seat.tx.claim.ok', { seatIndex });
       } catch (err) {
-        debugLog('seat.tx.claim.fail', { code: err?.code });
+        if (window.jamlog) window.jamlog.push('seat.tx.claim.fail', { code: err?.code, message: err?.message });
         const msg = err?.code === 'permission-denied'
           ? "You're not signed in. Try again in 2s."
           : "Seat taken—try another.";
@@ -345,6 +350,7 @@
         const ok = confirm("Leave this table and return remaining chips to your wallet?");
         if (!ok) return;
 
+        if (window.jamlog) window.jamlog.push('seat.tx.leave.start', { tableId });
         try {
           await runTransaction(db, async (tx) => {
             const playerRef = doc(db, "players", cp.id);
@@ -384,9 +390,9 @@
             tx.update(tableRef, { activeSeatCount: increment(-1) });
           });
           alert("You left the table. Chips returned to wallet.");
-          debugLog('seat.tx.leave.ok');
+          if (window.jamlog) window.jamlog.push('seat.tx.leave.ok');
         } catch (err) {
-          debugLog('seat.tx.leave.fail', { code: err?.code });
+          if (window.jamlog) window.jamlog.push('seat.tx.leave.fail', { code: err?.code, message: err?.message });
           const msg = err?.code === 'permission-denied'
             ? "You're not signed in. Try again in 2s."
             : "Error leaving seat.";
