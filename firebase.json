@@ -2,7 +2,11 @@
   "hosting": {
     "site": "jampoker",
     "public": "public",
-    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"]
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/adminDeleteTable", "function": "adminDeleteTable" },
+      { "source": "/adminDeleteAllTables", "function": "adminDeleteAllTables" }
+    ]
   },
   "functions": {
     "source": "functions",
