@@ -7,6 +7,13 @@ import { onDocumentWritten, onDocumentUpdated, onDocumentCreated } from "firebas
 initializeApp();
 const db = getFirestore();
 
+function getTableBlinds(table: any) {
+  return {
+    sb: table?.blinds?.sbCents ?? table.smallBlindCents,
+    bb: table?.blinds?.bbCents ?? table.bigBlindCents,
+  };
+}
+
 // Simple HTTP ping for sanity checks
 export const ping = onRequest({ region: "us-central1" }, (_req, res) => {
   res.status(200).send("pong");
@@ -177,6 +184,7 @@ export const onSeatsChanged = onDocumentWritten(
       if (!dealerId) return;
       const dealer = seats.find((s) => s.playerId === dealerId);
       const variant = table.nextVariantId ?? "holdem";
+      const { sb, bb } = getTableBlinds(table);
 
       await createHandTx(tx, tableRef, {
         variant,
@@ -184,8 +192,8 @@ export const onSeatsChanged = onDocumentWritten(
         dealerId,
         dealerName: dealer?.playerName || "",
         startedAt: FieldValue.serverTimestamp(),
-        sbCents: table.smallBlindCents,
-        bbCents: table.bigBlindCents,
+        sbCents: sb,
+        bbCents: bb,
         potCents: 0,
       });
 
@@ -329,8 +337,9 @@ export const onHandCreated = onDocumentCreated(
       const sbSeat = seats[(dealerSeat.seatNum + 1) % seats.length];
       const bbSeat = seats[(dealerSeat.seatNum + 2) % seats.length];
 
-      const sbAmount = Math.min(sbSeat.chipStackCents, table.smallBlindCents);
-      const bbAmount = Math.min(bbSeat.chipStackCents, table.bigBlindCents);
+      const { sb, bb } = getTableBlinds(table);
+      const sbAmount = Math.min(sbSeat.chipStackCents, sb);
+      const bbAmount = Math.min(bbSeat.chipStackCents, bb);
 
       tx.update(tableRef.collection("seats").doc(sbSeat.seatId), {
         chipStackCents: sbSeat.chipStackCents - sbAmount,
@@ -376,7 +385,7 @@ export const onHandCreated = onDocumentCreated(
       const actorPlayerId =
         seats.find((s) => s.seatNum === roundStartSeatNum)?.playerId || "";
       const toCallCents = toCallFor(contributions, actorPlayerId);
-      tx.update(handRef, { toCallCents, minRaiseCents: table.bigBlindCents });
+      tx.update(handRef, { toCallCents, minRaiseCents: bb });
     });
   }
 );
@@ -637,14 +646,15 @@ export const onHandEnded = onDocumentUpdated(
 
       if (seats.length >= 2 && table.nextVariantId) {
         const dealerSeat = seats.find((s) => s.playerId === nextDealerId);
+        const { sb, bb } = getTableBlinds(table);
         const handId = await createHandTx(tx, tableRef, {
           variant: table.nextVariantId,
           status: "pending",
           dealerId: nextDealerId,
           dealerName: dealerSeat?.playerName || "",
           startedAt: FieldValue.serverTimestamp(),
-          sbCents: table.smallBlindCents,
-          bbCents: table.bigBlindCents,
+          sbCents: sb,
+          bbCents: bb,
           potCents: 0,
         });
         const afterNext = rotateDealer(seats, nextDealerId);
@@ -687,14 +697,15 @@ export const onVariantChosen = onDocumentUpdated(
       const dealerSeat = seats.find((s) => s.playerId === table.nextDealerId);
       if (!dealerSeat) return;
 
+      const { sb, bb } = getTableBlinds(table);
       await createHandTx(tx, tableRef, {
         variant: table.nextVariantId,
         status: "pending",
         dealerId: dealerSeat.playerId,
         dealerName: dealerSeat.playerName,
         startedAt: FieldValue.serverTimestamp(),
-        sbCents: table.smallBlindCents,
-        bbCents: table.bigBlindCents,
+        sbCents: sb,
+        bbCents: bb,
         potCents: 0,
       });
 

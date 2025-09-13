@@ -201,16 +201,13 @@
       try {
         const tableRef = await addDoc(tablesCol, {
           name,
-          minBuyInCents: minC,
-          maxBuyInCents: maxC,
-          defaultBuyInCents: defC,
-          smallBlindCents: sbC,
-          bigBlindCents: bbC,
+          active: true,
+          createdAt: serverTimestamp(),
           maxSeats: 6,
           activeSeatCount: 0,
-          active: true,
-          deletedAt: null,
-          createdAt: serverTimestamp(),
+          gameType: 'holdem',
+          blinds: { sbCents: sbC, bbCents: bbC },
+          buyIn: { minCents: minC, maxCents: maxC, defaultCents: defC },
         });
         const seatsCol = collection(tableRef, "seats");
         for (let i = 0; i < 6; i++) {
@@ -251,11 +248,18 @@
     const seatCounts = {};
     const seatUnsubs = {};
     const renderTables = () => {
-      const rows = Object.entries(tablesData).map(([id, d]) => {
-        const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
-        const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (${dollars(d.defaultBuyInCents || 0)})`;
-        const seated = seatCounts[id] || 0;
-        return `<tr data-id="${id}">
+      const rows = Object.entries(tablesData)
+        .sort((a, b) => (b[1].createdAt?.toMillis?.() || 0) - (a[1].createdAt?.toMillis?.() || 0))
+        .map(([id, d]) => {
+          const sb = d?.blinds?.sbCents ?? d.smallBlindCents ?? 0;
+          const bb = d?.blinds?.bbCents ?? d.bigBlindCents ?? 0;
+          const minB = d?.buyIn?.minCents ?? d.minBuyInCents ?? 0;
+          const maxB = d?.buyIn?.maxCents ?? d.maxBuyInCents ?? 0;
+          const defB = d?.buyIn?.defaultCents ?? d.defaultBuyInCents ?? 0;
+          const blindStr = `${dollars(sb)}/${dollars(bb)}`;
+          const rangeStr = `${dollars(minB)}–${dollars(maxB)} (${dollars(defB)})`;
+          const seated = seatCounts[id] || 0;
+          return `<tr data-id="${id}">
           <td style="padding:8px;border-bottom:1px solid #334155;"><div style="font-weight:600">${d.name || "(no name)"}</div><div class="small"><code>${id}</code></div></td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${blindStr}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${rangeStr}</td>
@@ -265,7 +269,7 @@
             <button class="archive-table" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-size:12px;cursor:pointer;">Archive</button>
           </td>
         </tr>`;
-      });
+        });
       if (rows.length === 0) {
         tablesBody.innerHTML = `<tr><td colspan="5" style="padding:8px;">No tables yet.</td></tr>`;
       } else {
@@ -273,9 +277,11 @@
       }
     };
 
-    onSnapshot(
-      query(tablesCol, where("active", "==", true), orderBy("createdAt", "desc")),
-      (snap) => {
+    function startTablesListener(useFallback = false) {
+      const q = useFallback
+        ? query(tablesCol, where("active", "==", true))
+        : query(tablesCol, where("active", "==", true), orderBy("createdAt", "desc"));
+      onSnapshot(q, (snap) => {
         snap.docChanges().forEach((change) => {
           const id = change.doc.id;
           if (change.type === "removed") {
@@ -300,17 +306,23 @@
           }
         });
         renderTables();
-      },
-      (err) => {
-        const loadingEl = document.getElementById("tables-loading");
-        if (loadingEl) {
-          const msg = err?.code === "permission-denied"
-            ? "Cannot load tables: permission denied."
-            : "Error loading tables: " + (err?.message || err);
-          loadingEl.textContent = msg;
+      }, (err) => {
+        if (err.code === "failed-precondition" && !useFallback) {
+          console.warn('admin.tables.fallback.index_missing');
+          startTablesListener(true);
+        } else {
+          const loadingEl = document.getElementById("tables-loading");
+          if (loadingEl) {
+            const msg = err?.code === "permission-denied"
+              ? "Cannot load tables: permission denied."
+              : "Error loading tables: " + (err?.message || err);
+            loadingEl.textContent = msg;
+          }
         }
-      }
-    );
+      });
+    }
+
+    startTablesListener();
 
     tablesBody?.addEventListener("click", async (e) => {
       if (!e.target.classList.contains("archive-table")) return;
