@@ -24,10 +24,18 @@
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
+    import { app } from "/firebase-init.js";
     import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
       doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
+
+    const auth = getAuth(app);
+    onAuthStateChanged(auth, (u) => {
+      if (u) console.log(`auth.anon.ready: uid=${u.uid}`);
+      else signInAnonymously(auth).catch(console.error);
+    });
 
     renderCurrentPlayerControls("you");
     const debugChip = document.getElementById('debug-chip');
