@@ -9,7 +9,8 @@ service cloud.firestore {
 
     match /tables/{tableId} {
       // Players may read only active tables.
-      allow read: if resource.data.active == true;
+      allow get: if resource.data.active == true;
+      allow list: if request.query.active == true;
 
       // Allow creating/deleting tables from Admin UI (dev phase).
       allow create, delete: if true;
