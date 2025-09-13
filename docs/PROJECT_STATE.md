@@ -14,12 +14,9 @@
 - **Blinds auto-posted** (SB/BB → pot; seat stacks deducted)
 - **Preflop skeleton** (fold, check/call, min-raise; server-validated; ends hand after round)
 - **Streets engine** merged: preflop→flop→turn→river + board, but UI render depends on table wiring (see “Open Issues”)
+- **brief-11c.hotfix-2** complete — lobby visibility, join flow, player board
 
 ## Open Issues / Next Steps
-- **brief-11c**: Seats wiring + Admin delete hotfix
-  - Ensure Lobby “Join” writes to `tables/{tableId}/seats/{playerId}` using the REAL `tableId` (doc.id).
-  - Ensure Table page subscribes to the SAME `tableId`.
-  - Relax Admin delete (dev) via HTTPS Functions so no key needed.
 - Verify **Board UI** renders in /table.html after closing preflop.
 - Later: Hand evaluator (Texas/Omaha), showdown settlement, Auth, stricter rules.
 

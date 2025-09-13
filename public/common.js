@@ -122,6 +122,10 @@ export const setDebug = (on) => {
   window.location.href = url.toString();
 };
 
+export const debugLog = (...args) => {
+  if (isDebug()) console.log(...args);
+};
+
 export const getParentTableIdFromSeat = (docSnap) => docSnap.ref.parent.parent?.id;
 
 export function showSeatsDebug(tableId, seatDocs) {
