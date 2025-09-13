@@ -194,12 +194,12 @@
     __adminDbg.push('app.start', { url: location.href });
 
     const auth = getAuth(app);
-    __adminDbg.push('auth.signInAnonymously.start');
     onAuthStateChanged(auth, (u) => {
       if (u) {
         __adminDbg.setUid(u.uid);
         __adminDbg.push('auth.ready', { uid: u.uid });
       } else {
+        __adminDbg.push('auth.signInAnonymously.start');
         signInAnonymously(auth)
           .then(() => __adminDbg.push('auth.signInAnonymously.ok'))
           .catch((e) => __adminDbg.push('auth.signInAnonymously.fail', { code: e?.code, message: e?.message }));
