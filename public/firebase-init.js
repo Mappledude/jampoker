@@ -2,6 +2,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-app.js";
 
 const firebaseConfig = {
+  // API key is restricted via HTTP referrers and Identity Toolkit API only
   apiKey: "AIzaSyA2xi-TpIZYXJP8WIeLuSojgNHmUJMe0vc",
   authDomain: "jam-poker.firebaseapp.com",
   projectId: "jam-poker",
