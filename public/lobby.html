@@ -335,17 +335,7 @@
             const newWallet = (p.walletCents || 0) + (s.chipStackCents || 0);
 
             tx.update(playerRef, { walletCents: newWallet });
-            tx.update(seatRef, {
-              occupiedBy: null,
-              playerId: null,
-              displayName: null,
-              playerName: null,
-              sittingOut: false,
-              stackCents: null,
-              chipStackCents: null,
-              updatedAt: serverTimestamp(),
-              active: false,
-            });
+            tx.delete(seatRef);
             tx.update(tableRef, { activeSeatCount: increment(-1) });
           });
           alert("You left the table. Chips returned to wallet.");
