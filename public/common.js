@@ -122,4 +122,21 @@ export const setDebug = (on) => {
   window.location.href = url.toString();
 };
 
+export const getParentTableIdFromSeat = (docSnap) => docSnap.ref.parent.parent?.id;
+
+export function showSeatsDebug(tableId, seatDocs) {
+  if (!isDebug()) return;
+  let box = document.getElementById('debug-seats');
+  if (!box) {
+    box = document.createElement('pre');
+    box.id = 'debug-seats';
+    box.style.fontFamily = 'monospace';
+    box.style.whiteSpace = 'pre';
+    box.style.fontSize = '11px';
+    document.body.prepend(box);
+  }
+  const paths = seatDocs.slice(0,5).map((s) => s.ref.path).join('\n');
+  box.textContent = `debug.tableId=${tableId}\n${paths}`;
+}
+
 
