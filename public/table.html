@@ -24,7 +24,7 @@
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer } from "/common.js";
+    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel } from "/common.js";
     import {
       doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
@@ -112,13 +112,13 @@
       }
       const h = handData;
       const vLabel = h.variant === 'omaha' ? 'Omaha' : "Hold'em";
-      const stageLabel = h.stage ? h.stage.charAt(0).toUpperCase() + h.stage.slice(1) : '';
+      const stageStr = stageLabel(h);
       const getNameBySeat = (n) => seatData.find(s => s.seatNum === n)?.playerName || '(left)';
       const dealerName = h.dealerName || getNameBySeat(h.positions?.dealerSeatNum);
       const sbName = getNameBySeat(h.positions?.sbSeatNum);
       const bbName = getNameBySeat(h.positions?.bbSeatNum);
       const actorName = getNameBySeat(h.actorSeatNum);
-      const board = (h.board || []).map(c => `[ ${c} ]`).join(' ');
+      const board = (h.board || []).map(c => `<span class="card-chip">${formatCard(c)}</span>`).join(' ');
       let contrib = '';
       if (h.contributions) {
         const parts = [];
@@ -128,14 +128,21 @@
         }
         if (parts.length) contrib = `<div class="small">${parts.join(', ')}</div>`;
       }
+      const boardLine = (h.board && h.board.length)
+        ? `<div class="small">Board: ${board}</div>`
+        : '';
+      const debugLine = isDebug()
+        ? `<div class="small">board=${(h.board||[]).join(',')}${h.deckIndex !== undefined ? ` deckIndex=${h.deckIndex}` : ''}</div>`
+        : '';
       handEl.innerHTML = `
         <div>Current Hand: ${vLabel} • Dealer: ${dealerName} • Status: ${h.status}</div>
         <div class="small" style="margin-top:4px;">Pot: ${dollars(h.potCents || 0)}</div>
-        <div class="small">Board: ${board || '(none)'}</div>
-        <div class="small">Stage: ${stageLabel}</div>
+        <div class="small">Stage: ${stageStr}</div>
+        ${boardLine}
         <div class="small">Positions: Dealer ${dealerName}, SB ${sbName}, BB ${bbName}</div>
         ${contrib}
         <div class="small" style="margin-top:4px;">Action: ${actorName}</div>
+        ${debugLine}
       `;
       renderActions();
     }
