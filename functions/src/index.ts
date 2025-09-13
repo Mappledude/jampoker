@@ -13,6 +13,7 @@ export const ping = onRequest({ region: "us-central1" }, (_req, res) => {
 });
 
 interface SeatInfo {
+  seatId: string;
   playerId: string;
   playerName: string;
   seatNum: number;
@@ -26,7 +27,8 @@ async function getActiveSeats(tx: Transaction, tableRef: DocumentReference): Pro
     const d = s.data();
     if (d?.active) {
       seats.push({
-        playerId: s.id,
+        seatId: s.id,
+        playerId: d.playerId || "",
         playerName: d.playerName || "",
         seatNum: typeof d.seatNum === "number" ? d.seatNum : -1,
         chipStackCents: typeof d.chipStackCents === "number" ? d.chipStackCents : 0,
@@ -41,7 +43,7 @@ async function getActiveSeats(tx: Transaction, tableRef: DocumentReference): Pro
   });
   if (needsFix) {
     sorted.forEach((s, idx) => {
-      tx.update(tableRef.collection("seats").doc(s.playerId), { seatNum: idx });
+      tx.update(tableRef.collection("seats").doc(s.seatId), { seatNum: idx });
       s.seatNum = idx;
     });
   }
@@ -133,15 +135,15 @@ async function settlePotToWinnerTx(
   tx: Transaction,
   tableRef: DocumentReference,
   handRef: DocumentReference,
-  winnerPlayerId: string
+  winnerSeatId: string
 ) {
   const [seatSnap, handSnap] = await Promise.all([
-    tx.get(tableRef.collection("seats").doc(winnerPlayerId)),
+    tx.get(tableRef.collection("seats").doc(winnerSeatId)),
     tx.get(handRef),
   ]);
   const seatChips = seatSnap.data()?.chipStackCents || 0;
   const pot = handSnap.data()?.potCents || 0;
-  tx.update(tableRef.collection("seats").doc(winnerPlayerId), {
+  tx.update(tableRef.collection("seats").doc(winnerSeatId), {
     chipStackCents: seatChips + pot,
   });
   tx.update(handRef, { potCents: 0 });
@@ -156,7 +158,7 @@ async function createHandTx(tx: Transaction, tableRef: DocumentReference, data: 
 
 // Trigger: seat changes -> maybe create a new hand
 export const onSeatsChanged = onDocumentWritten(
-  { region: "us-central1", document: "tables/{tableId}/seats/{playerId}" },
+  { region: "us-central1", document: "tables/{tableId}/seats/{seatId}" },
   async (event) => {
     const tableId = event.params.tableId;
     const tableRef = db.collection("tables").doc(tableId);
@@ -330,10 +332,10 @@ export const onHandCreated = onDocumentCreated(
       const sbAmount = Math.min(sbSeat.chipStackCents, table.smallBlindCents);
       const bbAmount = Math.min(bbSeat.chipStackCents, table.bigBlindCents);
 
-      tx.update(tableRef.collection("seats").doc(sbSeat.playerId), {
+      tx.update(tableRef.collection("seats").doc(sbSeat.seatId), {
         chipStackCents: sbSeat.chipStackCents - sbAmount,
       });
-      tx.update(tableRef.collection("seats").doc(bbSeat.playerId), {
+      tx.update(tableRef.collection("seats").doc(bbSeat.seatId), {
         chipStackCents: bbSeat.chipStackCents - bbAmount,
       });
 
@@ -406,9 +408,11 @@ export const onIntentCreated = onDocumentCreated(
       const seats = await getActiveSeats(tx, tableRef);
       const folded: Record<string, true> = hand.folded || {};
       const seatByNum: Record<number, SeatInfo> = {};
+      const seatByPlayerId: Record<string, SeatInfo> = {};
       const chipMap: Record<string, number> = {};
       seats.forEach((s) => {
         seatByNum[s.seatNum] = s;
+        seatByPlayerId[s.playerId] = s;
         chipMap[s.playerId] = s.chipStackCents;
       });
       const seat = seats.find((s) => s.playerId === intent.playerId);
@@ -428,9 +432,12 @@ export const onIntentCreated = onDocumentCreated(
 
       const updateSeat = (playerId: string, newChips: number) => {
         chipMap[playerId] = newChips;
-        tx.update(tableRef.collection("seats").doc(playerId), {
-          chipStackCents: newChips,
-        });
+        const seatId = seatByPlayerId[playerId]?.seatId;
+        if (seatId) {
+          tx.update(tableRef.collection("seats").doc(seatId), {
+            chipStackCents: newChips,
+          });
+        }
       };
 
       const toCall = toCallFor(contributions, intent.playerId);
@@ -493,7 +500,7 @@ export const onIntentCreated = onDocumentCreated(
       );
       if (remaining.length <= 1) {
         const winner = remaining[0];
-        if (winner) await settlePotToWinnerTx(tx, tableRef, handRef, winner.playerId);
+        if (winner) await settlePotToWinnerTx(tx, tableRef, handRef, winner.seatId);
         tx.update(handRef, { status: "ended" });
         tx.update(tableRef, { currentHandId: null });
         tx.delete(intentRef);
