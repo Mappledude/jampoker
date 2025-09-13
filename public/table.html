@@ -171,7 +171,7 @@
     function renderSeats() {
       const rows = seatData
         .filter((s) => s.occupiedBy)
-        .map((s) => `<div>${s.displayName || '(no name)'} • ${dollars(s.stackCents || 0)}</div>`);
+        .map((s) => `<div>${s.displayName || '(no name)'} • ${dollars(s.chipStackCents || 0)}</div>`);
       seatsEl.innerHTML = `<h2 style="margin-top:0;">Seats</h2>${rows.join('') || '<div class="small">(none yet)</div>'}`;
     }
 
@@ -186,7 +186,7 @@
         return;
       }
       const folded = handData?.folded || {};
-      const isActor = handData && seat.seatIndex === handData.actorSeatNum && !folded[current.id] && (seat.stackCents > 0);
+      const isActor = handData && seat.seatIndex === handData.actorSeatNum && !folded[current.id] && (seat.chipStackCents > 0);
       const toCall = handData?.toCallCents || 0;
       const minRaise = handData?.minRaiseCents || 0;
       const callLabel = toCall > 0 ? `Call ${dollars(toCall)}` : 'Check';

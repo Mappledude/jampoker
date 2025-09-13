@@ -161,7 +161,7 @@
           seatSnap.forEach((s) => {
             const sd = s.data();
             if (sd.occupiedBy) {
-              seated.push(`<div style=\\"display:flex;justify-content:space-between;\\"><span>${sd.displayName || sd.occupiedBy}</span><span>${dollars(sd.stackCents || 0)}</span></div>`);
+              seated.push(`<div style=\\"display:flex;justify-content:space-between;\\"><span>${sd.displayName || sd.occupiedBy}</span><span>${dollars(sd.chipStackCents || 0)}</span></div>`);
               seatMap.push({ seatNum: sd.seatIndex, playerName: sd.displayName || sd.occupiedBy });
               activeCount++;
             }
@@ -332,7 +332,7 @@
 
             const p = playerSnap.data() || {};
             const s = seatSnap.data();
-            const newWallet = (p.walletCents || 0) + (s.stackCents || 0);
+            const newWallet = (p.walletCents || 0) + (s.chipStackCents || 0);
 
             tx.update(playerRef, { walletCents: newWallet });
             tx.update(seatRef, {
