@@ -23,10 +23,9 @@ service cloud.firestore {
     match /tables/{tableId}/seats/{playerId} {
       allow read: if true;
 
-      // Join / Leave from client is okay; server manages chip counts afterwards.
+      // Seats are created when a player joins and removed when they leave.
+      // Chip stacks and seat numbers are managed by the server, so updates are blocked.
       allow create, delete: if true;
-
-      // Prevent clients from editing chip stacks, seatNum, etc.
       allow update: if false;
     }
 
