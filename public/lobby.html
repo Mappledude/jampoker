@@ -26,7 +26,7 @@
 
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls, isDebug, setDebug } from "/common.js";
+    import { db, dollars, parseDollarsToCents, getCurrentPlayer, renderCurrentPlayerControls, isDebug, setDebug, formatCard, stageLabel } from "/common.js";
     import {
       collection, query, orderBy, onSnapshot, doc, collection as subcol,
       runTransaction, serverTimestamp, getDoc, updateDoc
@@ -55,10 +55,11 @@
         const vLabel = hand.variant === "omaha" ? "Omaha" : "Hold'em";
         banner = `Current Hand: ${vLabel} • Dealer: ${hand.dealerName || ""} • Status: ${hand.status}`;
         potLine = `<div class=\"small\">Pot: ${dollars(hand.potCents || 0)}</div>`;
-        const stageLabel = hand.stage ? hand.stage.charAt(0).toUpperCase() + hand.stage.slice(1) : "";
-        stageLine = `<div class=\"small\">Stage: ${stageLabel}</div>`;
-        const board = (hand.board || []).map(c => c.substring(0,5)).join(' ');
-        boardLine = `<div class=\"small\">Board: ${board}</div>`;
+        stageLine = `<div class=\"small\">Stage: ${stageLabel(hand)}</div>`;
+        if (hand.board && hand.board.length) {
+          const board = hand.board.map(c => `<span class=\"card-chip\" style=\"font-size:12px;\">${formatCard(c)}</span>`).join(' ');
+          boardLine = `<div class=\"small\">Board: ${board}</div>`;
+        }
         const getName = (n) => seatMap?.find(s => s.seatNum === n)?.playerName || "(left)";
         const sbName = getName(hand.positions?.sbSeatNum);
         const bbName = getName(hand.positions?.bbSeatNum);

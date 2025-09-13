@@ -18,6 +18,16 @@ export const parseDollarsToCents = (input) => {
   return Math.max(0, Math.round(value * 100));
 };
 
+export const formatCard = (code) => `[ ${code} ]`;
+
+export const stageLabel = (hand) => {
+  const s = hand?.stage;
+  if (s === 'flop') return 'Flop';
+  if (s === 'turn') return 'Turn';
+  if (s === 'river') return 'River';
+  return 'Preflop';
+};
+
 const LS_KEY_ID = "currentPlayerId";
 const LS_KEY_NAME = "currentPlayerName";
 
