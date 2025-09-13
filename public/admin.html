@@ -16,6 +16,10 @@
 
     <div id="you"></div>
 
+    <div id="auth-banner" class="small" style="display:none;background:#7f1d1d;color:white;padding:10px;border-radius:10px;margin-top:16px;">
+      Authentication isn’t configured for this project. In Firebase Console → Authentication, click Get started and enable Anonymous sign-in.
+    </div>
+
     <!-- PLAYERS -->
     <div class="card">
       <h1>Admin — Players</h1>
@@ -61,7 +65,7 @@
         </label>
       </div>
 
-      <button id="create-table" style="padding:10px 14px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;cursor:pointer">Create Table</button>
+      <button id="create-table" style="padding:10px 14px;border-radius:10px;border:1px solid #334155;background:#22c55e;color:#052e13;font-weight:700;cursor:pointer" disabled>Create Table</button>
       <p id="table-status" class="small" style="min-height:1.2em;"></p>
     </div>
 
@@ -193,16 +197,23 @@
     __adminDbg.setProj(window.__FIREBASE_PROJECT_ID__ || app.options.projectId);
     __adminDbg.push('app.start', { url: location.href });
 
+    const authBanner = document.getElementById('auth-banner');
     const auth = getAuth(app);
     onAuthStateChanged(auth, (u) => {
       if (u) {
+        authBanner.style.display = 'none';
         __adminDbg.setUid(u.uid);
         __adminDbg.push('auth.ready', { uid: u.uid });
       } else {
         __adminDbg.push('auth.signInAnonymously.start');
         signInAnonymously(auth)
           .then(() => __adminDbg.push('auth.signInAnonymously.ok'))
-          .catch((e) => __adminDbg.push('auth.signInAnonymously.fail', { code: e?.code, message: e?.message }));
+          .catch((e) => {
+            __adminDbg.push('auth.signInAnonymously.fail', { code: e?.code, message: e?.message });
+            if (e?.code === 'auth/configuration-not-found') {
+              authBanner.style.display = 'block';
+            }
+          });
       }
     });
 
