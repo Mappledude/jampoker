@@ -94,7 +94,7 @@
     import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls } from "/common.js";
     import {
       collection, addDoc, serverTimestamp, query, orderBy, onSnapshot,
-      doc, updateDoc, deleteDoc
+      doc, updateDoc, deleteDoc, setDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
     renderCurrentPlayerControls("you");
@@ -199,13 +199,36 @@
 
       tStatus.textContent = "Creating…"; tBtn.disabled = true;
       try {
-        await addDoc(tablesCol, {
-          name, minBuyInCents: minC, maxBuyInCents: maxC, defaultBuyInCents: defC,
-          smallBlindCents: sbC, bigBlindCents: bbC, active: true, createdAt: serverTimestamp()
+        const tableRef = await addDoc(tablesCol, {
+          name,
+          minBuyInCents: minC,
+          maxBuyInCents: maxC,
+          defaultBuyInCents: defC,
+          smallBlindCents: sbC,
+          bigBlindCents: bbC,
+          maxSeats: 6,
+          activeSeatCount: 0,
+          active: true,
+          deletedAt: null,
+          createdAt: serverTimestamp(),
         });
+        const seatsCol = collection(tableRef, "seats");
+        for (let i = 0; i < 6; i++) {
+          await setDoc(doc(seatsCol, String(i)), {
+            seatIndex: i,
+            occupiedBy: null,
+            displayName: null,
+            sittingOut: false,
+            stackCents: null,
+            updatedAt: serverTimestamp(),
+          });
+        }
         tStatus.textContent = "Table created ✔"; tName.value = "";
-      } catch (e) { tStatus.textContent = "Error: " + (e?.message || e); }
-      finally { tBtn.disabled = false; }
+      } catch (e) {
+        tStatus.textContent = "Error: " + (e?.message || e);
+      } finally {
+        tBtn.disabled = false;
+      }
     });
 
     const tablesBody = document.getElementById("tables-body");
@@ -239,7 +262,7 @@
           <td style="padding:8px;border-bottom:1px solid #334155;">${seated}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;text-align:right;">
             <a href="/table.html?id=${id}" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-size:12px;text-decoration:none;">Open</a>
-            <button class="del-table" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-size:12px;cursor:pointer;">Delete</button>
+            <button class="archive-table" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-size:12px;cursor:pointer;">Archive</button>
           </td>
         </tr>`;
       });
@@ -263,7 +286,12 @@
           if (!seatUnsubs[id]) {
             const seatsCol = collection(doc(db, "tables", id), "seats");
             seatUnsubs[id] = onSnapshot(seatsCol, (s) => {
-              seatCounts[id] = s.size;
+              let cnt = 0;
+              s.forEach((docSnap) => {
+                const sd = docSnap.data();
+                if (sd.occupiedBy) cnt++;
+              });
+              seatCounts[id] = cnt;
               renderTables();
             });
           }
@@ -273,20 +301,17 @@
     });
 
     tablesBody?.addEventListener("click", async (e) => {
-      if (!e.target.classList.contains("del-table")) return;
+      if (!e.target.classList.contains("archive-table")) return;
       const row = e.target.closest("tr");
       const id = row.getAttribute("data-id");
-      const conf = prompt("Type DELETE to remove this table and its hands/seats.") === "DELETE";
+      const conf = confirm("Archive this table?");
       if (!conf) return;
       try {
-        const res = await fetch("/adminDeleteTable", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ tableId: id }),
+        await updateDoc(doc(db, "tables", id), {
+          active: false,
+          deletedAt: serverTimestamp(),
         });
-        const data = await res.json();
-        if (!res.ok || !data.ok) throw new Error(data.error || "Error");
-        alert("Table deleted.");
+        alert("Table archived.");
       } catch (err) {
         alert("Error: " + (err?.message || err));
       }
