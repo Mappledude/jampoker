@@ -12,28 +12,32 @@ service cloud.firestore {
     }
 
     match /tables/{tableId} {
-      // Players may read only active tables.
+      // Players (anyone) can read active tables for Lobby/Table
       allow read: if resource.data.active == true;
 
-      // Admin keeps create & destructive updates
-      allow create, delete: if isAdmin();
+      // Dev-safe create: any authenticated user (anon OK) may create a table BUT only with whitelisted keys
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasAll(['active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn'])
+        && request.resource.data.keys().subsetOf(['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn','deletedAt']);
 
-      // Allow players (anon auth) to update ONLY activeSeatCount
-      allow update: if (request.auth != null &&
-        request.resource.data.diff(resource.data).changedKeys().hasOnly(['activeSeatCount']))
-        || isAdmin();
+      // Update: players may ONLY change activeSeatCount; admins may archive (active/deletedAt)
+      allow update: if (request.auth != null
+                        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['activeSeatCount']))
+                    || (isAdmin() && request.resource.data.diff(resource.data).changedKeys().hasOnly(['active','deletedAt']));
+
+      // Delete: keep admin-only
+      allow delete: if isAdmin();
 
       match /seats/{seatId} {
         allow read: if true;
-
-        // Allow players (anon auth) to claim/leave seats with limited fields only
-        allow create, update: if request.auth != null &&
-          request.resource.data.diff(resource.data).changedKeys().subsetOf([
-            'seatIndex','seatNum','occupiedBy','playerId','playerName','displayName',
-            'sittingOut','stackCents','chipStackCents','updatedAt','active'
-          ]) &&
-          (!resource.exists || request.resource.data.seatIndex == resource.data.seatIndex);
-        // No deletes by players
+        // Claim/leave: only limited fields may change; anon auth permitted
+        allow create: if request.auth != null
+          && request.resource.data.keys().hasAll(['seatIndex'])
+          && request.resource.data.keys().subsetOf(['seatIndex','occupiedBy','displayName','sittingOut','stackCents','updatedAt']);
+        allow update: if request.auth != null
+          && request.resource.data.diff(resource.data).changedKeys()
+               .subsetOf(['occupiedBy','displayName','sittingOut','stackCents','updatedAt'])
+          && request.resource.data.seatIndex == resource.data.seatIndex; // seat index immutable
         allow delete: if false;
       }
     }

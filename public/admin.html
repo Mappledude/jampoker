@@ -196,6 +196,7 @@
       const maxC = parseDollarsToCents(tMax.value);
       const sbC  = parseDollarsToCents(tSB.value);
       const bbC  = parseDollarsToCents(tBB.value);
+      const maxSeats = 9;
 
       const err = (m) => (tStatus.textContent = m);
 
@@ -211,26 +212,38 @@
           name,
           active: true,
           createdAt: serverTimestamp(),
-          maxSeats: 6,
+          maxSeats,
           activeSeatCount: 0,
           gameType: 'holdem',
           blinds: { sbCents: sbC, bbCents: bbC },
           buyIn: { minCents: minC, maxCents: maxC, defaultCents: defC },
         });
-        const seatsCol = collection(tableRef, "seats");
-        for (let i = 0; i < 6; i++) {
-          await setDoc(doc(seatsCol, String(i)), {
-            seatIndex: i,
-            occupiedBy: null,
-            displayName: null,
-            sittingOut: false,
-            stackCents: null,
-            updatedAt: serverTimestamp(),
-          });
+
+        try {
+          const seatsCol = collection(tableRef, "seats");
+          const seatWrites = [];
+          for (let i = 0; i < maxSeats; i++) {
+            seatWrites.push(setDoc(doc(seatsCol, String(i)), {
+              seatIndex: i,
+              occupiedBy: null,
+              displayName: null,
+              sittingOut: false,
+              stackCents: null,
+              updatedAt: serverTimestamp(),
+            }));
+          }
+          await Promise.all(seatWrites);
+          console.log('admin.seats.seed.ok', { count: seatWrites.length });
+        } catch (err) {
+          console.error('admin.seats.seed.fail', err);
         }
-        tStatus.textContent = "Table created ✔"; tName.value = "";
+
+        console.log('admin.table.create.ok', { id: tableRef.id });
+        tStatus.textContent = `Table created: ${tableRef.id}`;
+        tName.value = "";
       } catch (e) {
-        tStatus.textContent = "Error: " + (e?.message || e);
+        console.error('admin.table.create.fail', { code: e?.code });
+        tStatus.textContent = "Error: " + (e?.code || e?.message || e);
       } finally {
         tBtn.disabled = false;
       }
