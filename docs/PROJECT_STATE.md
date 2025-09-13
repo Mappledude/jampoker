@@ -16,6 +16,7 @@
 - **Streets engine** merged: preflop→flop→turn→river + board, but UI render depends on table wiring (see “Open Issues”)
 - **brief-11c.hotfix-2** complete — lobby visibility, join flow, player board
 - **brief-11c.hotfix-4** complete — anon auth + join permissions
+- **brief-11c.hotfix-5** complete — admin create table + seat seeding + dev rules
 
 ## Open Issues / Next Steps
 - Verify **Board UI** renders in /table.html after closing preflop.
