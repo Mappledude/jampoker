@@ -25,9 +25,13 @@ service cloud.firestore {
       allow read: if true;
 
       // Seats are created when a player joins and removed when they leave.
-      // Chip stacks and seat numbers are managed by the server, so updates are blocked.
+      // Chip stacks and seat numbers are managed by the server, so updates
+      // are only allowed when the player is updating their own seat record.
       allow create, delete: if true;
-      allow update: if false;
+      allow update: if
+        request.auth != null &&
+        request.auth.uid == request.resource.data.occupiedBy &&
+        request.auth.uid == request.resource.data.playerId;
     }
 
     // Hands are server-managed only.
