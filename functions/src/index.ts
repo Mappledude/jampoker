@@ -1,6 +1,6 @@
 // Cloud Functions: auto-start hands, dealer rotation, next-dealer variant
 import { initializeApp } from "firebase-admin/app";
-import { getFirestore, FieldValue, DocumentReference, Transaction } from "firebase-admin/firestore";
+import { getFirestore, FieldValue, DocumentReference, Transaction, CollectionReference } from "firebase-admin/firestore";
 import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentWritten, onDocumentUpdated, onDocumentCreated } from "firebase-functions/v2/firestore";
 
@@ -195,6 +195,106 @@ export const onSeatsChanged = onDocumentWritten(
         nextVariantId: null,
       });
     });
+  }
+);
+
+async function deleteCollection(
+  ref: CollectionReference,
+  batchSize: number
+): Promise<number> {
+  let deleted = 0;
+  while (true) {
+    const snap = await ref.limit(batchSize).get();
+    if (snap.empty) break;
+    const batch = db.batch();
+    snap.docs.forEach((d) => batch.delete(d.ref));
+    await batch.commit();
+    deleted += snap.docs.length;
+    if (snap.size < batchSize) break;
+  }
+  return deleted;
+}
+
+async function deleteTable(tableId: string) {
+  const tableRef = db.collection("tables").doc(tableId);
+  const deletedSeats = await deleteCollection(
+    tableRef.collection("seats"),
+    200
+  );
+  const deletedHands = await deleteCollection(
+    tableRef.collection("hands"),
+    100
+  );
+  await tableRef.delete();
+  return { deletedSeats, deletedHands };
+}
+
+async function verifyAdminKey(key: string | undefined): Promise<boolean> {
+  const snap = await db.collection("config").doc("admin").get();
+  const expected = snap.data()?.key;
+  return !!key && !!expected && key === expected;
+}
+
+export const adminDeleteTable = onRequest(
+  { region: "us-central1" },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send({ ok: false, error: "POST only" });
+      return;
+    }
+    try {
+      const auth = req.get("authorization") || "";
+      const match = auth.match(/^Bearer (.+)$/);
+      const key = match?.[1];
+      if (!(await verifyAdminKey(key))) {
+        res.status(403).send({ ok: false, error: "Forbidden" });
+        return;
+      }
+      const tableId = req.body?.tableId;
+      if (!tableId) {
+        res.status(400).send({ ok: false, error: "Missing tableId" });
+        return;
+      }
+      const { deletedSeats, deletedHands } = await deleteTable(tableId);
+      res.status(200).send({ ok: true, deletedSeats, deletedHands });
+    } catch (err: any) {
+      res.status(500).send({ ok: false, error: err?.message || String(err) });
+    }
+  }
+);
+
+export const adminDeleteAllTables = onRequest(
+  { region: "us-central1" },
+  async (req, res) => {
+    if (req.method !== "POST") {
+      res.status(405).send({ ok: false, error: "POST only" });
+      return;
+    }
+    try {
+      const auth = req.get("authorization") || "";
+      const match = auth.match(/^Bearer (.+)$/);
+      const key = match?.[1];
+      if (!(await verifyAdminKey(key))) {
+        res.status(403).send({ ok: false, error: "Forbidden" });
+        return;
+      }
+      const snap = await db.collection("tables").get();
+      let seatsDeletedTotal = 0;
+      let handsDeletedTotal = 0;
+      for (const doc of snap.docs) {
+        const { deletedSeats, deletedHands } = await deleteTable(doc.id);
+        seatsDeletedTotal += deletedSeats;
+        handsDeletedTotal += deletedHands;
+      }
+      res.status(200).send({
+        ok: true,
+        tablesDeleted: snap.size,
+        seatsDeletedTotal,
+        handsDeletedTotal,
+      });
+    } catch (err: any) {
+      res.status(500).send({ ok: false, error: err?.message || String(err) });
+    }
   }
 );
 

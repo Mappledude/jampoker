@@ -66,8 +66,27 @@
     </div>
 
     <div class="card" style="margin-top:16px;">
-      <h2 style="margin-top:0;">Tables</h2>
-      <div id="tables-list" class="small">Loading tables…</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;">
+        <h2 style="margin-top:0;">Tables</h2>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <button id="admin-key-btn" class="small" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e5e7eb;cursor:pointer"></button>
+          <button id="delete-all-tables" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-weight:700;cursor:pointer">Delete ALL tables</button>
+        </div>
+      </div>
+      <table style="width:100%;border-collapse:collapse;margin-top:8px;">
+        <thead>
+          <tr class="small" style="text-align:left;">
+            <th style="padding:8px;border-bottom:1px solid #334155;">Name / ID</th>
+            <th style="padding:8px;border-bottom:1px solid #334155;">Blinds</th>
+            <th style="padding:8px;border-bottom:1px solid #334155;">Buy-in</th>
+            <th style="padding:8px;border-bottom:1px solid #334155;">Seated</th>
+            <th style="padding:8px;border-bottom:1px solid #334155;text-align:right;">Actions</th>
+          </tr>
+        </thead>
+        <tbody id="tables-body" class="small">
+          <tr><td colspan="5" style="padding:8px;" id="tables-loading">Loading tables…</td></tr>
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -152,7 +171,7 @@
       }
     });
 
-    // ----- tables (same as before) -----
+    // ----- tables -----
     const tablesCol = collection(db, "tables");
     const tName = document.getElementById("table-name");
     const tMin = document.getElementById("min-buyin");
@@ -162,7 +181,6 @@
     const tBB  = document.getElementById("bb");
     const tBtn = document.getElementById("create-table");
     const tStatus = document.getElementById("table-status");
-    const tList = document.getElementById("tables-list");
 
     tBtn?.addEventListener("click", async () => {
       const name = (tName.value || "").trim();
@@ -191,51 +209,120 @@
       finally { tBtn.disabled = false; }
     });
 
-    const renderTableRow = (id, d) => {
-      const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
-      const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (default ${dollars(d.defaultBuyInCents || 0)})`;
-      const active = d.active ? "Active" : "Archived";
-      const toggleLabel = d.active ? "Archive" : "Activate";
-      return `
-        <div class="row" data-type="table" data-id="${id}" style="display:grid;grid-template-columns:1fr auto;gap:12px;padding:10px 0;border-bottom:1px solid #334155">
-          <div>
-            <div style="font-weight:600">${d.name || "(no name)"}</div>
-            <div class="small">Blinds: ${blindStr}</div>
-            <div class="small">Buy-in: ${rangeStr}</div>
-            <div class="small">Status: ${active} • ID: <code>${id}</code></div>
-          </div>
-          <div style="display:flex; gap:8px; align-items:center; justify-content:flex-end">
-            <button class="toggle-active-btn" style="padding:8px 12px;border-radius:10px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;cursor:pointer">${toggleLabel}</button>
-          </div>
-          <div class="row-status small" style="grid-column:1 / -1; min-height:1em;"></div>
-        </div>
-      `;
+    const tablesBody = document.getElementById("tables-body");
+    const adminKeyBtn = document.getElementById("admin-key-btn");
+    const deleteAllBtn = document.getElementById("delete-all-tables");
+
+    const getAdminKey = () => localStorage.getItem("adminKey") || "";
+    const updateKeyBtn = () => {
+      adminKeyBtn.textContent = getAdminKey() ? "Change Key" : "Set Admin Key";
+    };
+    const ensureKey = async () => {
+      let k = getAdminKey();
+      if (!k) {
+        k = prompt("Enter admin key")?.trim() || "";
+        if (k) localStorage.setItem("adminKey", k);
+      }
+      updateKeyBtn();
+      return k;
+    };
+    adminKeyBtn?.addEventListener("click", () => {
+      const k = prompt("Enter admin key")?.trim() || "";
+      if (k) localStorage.setItem("adminKey", k);
+      else localStorage.removeItem("adminKey");
+      updateKeyBtn();
+    });
+    updateKeyBtn();
+
+    deleteAllBtn?.addEventListener("click", async () => {
+      const conf = prompt("Type DELETE ALL") === "DELETE ALL";
+      if (!conf) return;
+      const key = await ensureKey();
+      if (!key) return;
+      try {
+        const res = await fetch("/adminDeleteAllTables", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + key,
+          },
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Error");
+      } catch (err) {
+        alert("Error: " + (err?.message || err));
+      }
+    });
+
+    const tablesData = {};
+    const seatCounts = {};
+    const seatUnsubs = {};
+    const renderTables = () => {
+      const rows = Object.entries(tablesData).map(([id, d]) => {
+        const blindStr = `${dollars(d.smallBlindCents || 0)}/${dollars(d.bigBlindCents || 0)}`;
+        const rangeStr = `${dollars(d.minBuyInCents || 0)}–${dollars(d.maxBuyInCents || 0)} (${dollars(d.defaultBuyInCents || 0)})`;
+        const seated = seatCounts[id] || 0;
+        return `<tr data-id="${id}">
+          <td style="padding:8px;border-bottom:1px solid #334155;"><div style="font-weight:600">${d.name || "(no name)"}</div><div class="small"><code>${id}</code></div></td>
+          <td style="padding:8px;border-bottom:1px solid #334155;">${blindStr}</td>
+          <td style="padding:8px;border-bottom:1px solid #334155;">${rangeStr}</td>
+          <td style="padding:8px;border-bottom:1px solid #334155;">${seated}</td>
+          <td style="padding:8px;border-bottom:1px solid #334155;text-align:right;">
+            <a href="/table.html?id=${id}" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-size:12px;text-decoration:none;">Open</a>
+            <button class="del-table" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-size:12px;cursor:pointer;">Delete</button>
+          </td>
+        </tr>`;
+      });
+      if (rows.length === 0) {
+        tablesBody.innerHTML = `<tr><td colspan="5" style="padding:8px;">No tables yet.</td></tr>`;
+      } else {
+        tablesBody.innerHTML = rows.join("");
+      }
     };
 
     onSnapshot(query(tablesCol, orderBy("createdAt", "desc")), (snap) => {
-      if (!tList) return;
-      if (snap.empty) { tList.textContent = "No tables yet."; return; }
-      const rows = [];
-      snap.forEach(docSnap => rows.push(renderTableRow(docSnap.id, docSnap.data())));
-      tList.innerHTML = rows.join("");
+      snap.docChanges().forEach((change) => {
+        const id = change.doc.id;
+        if (change.type === "removed") {
+          delete tablesData[id];
+          if (seatUnsubs[id]) seatUnsubs[id]();
+          delete seatUnsubs[id];
+          delete seatCounts[id];
+        } else {
+          tablesData[id] = change.doc.data();
+          if (!seatUnsubs[id]) {
+            const seatsCol = collection(doc(db, "tables", id), "seats");
+            seatUnsubs[id] = onSnapshot(seatsCol, (s) => {
+              seatCounts[id] = s.size;
+              renderTables();
+            });
+          }
+        }
+      });
+      renderTables();
     });
 
-    document.addEventListener("click", async (e) => {
-      const row = e.target.closest(".row");
-      if (!row || row.getAttribute("data-type") !== "table") return;
+    tablesBody?.addEventListener("click", async (e) => {
+      if (!e.target.classList.contains("del-table")) return;
+      const row = e.target.closest("tr");
       const id = row.getAttribute("data-id");
-      const status = row.querySelector(".row-status");
-
-      if (e.target.classList.contains("toggle-active-btn")) {
-        status.textContent = "Updating…";
-        try {
-          const label = e.target.textContent;
-          const toArchive = label.includes("Archive");
-          await updateDoc(doc(db, "tables", id), { active: !toArchive });
-          status.textContent = "Updated ✔";
-        } catch (err) {
-          status.textContent = "Error: " + (err?.message || err);
-        }
+      const conf = prompt("Type DELETE to remove this table and its hands/seats.") === "DELETE";
+      if (!conf) return;
+      const key = await ensureKey();
+      if (!key) return;
+      try {
+        const res = await fetch("/adminDeleteTable", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: "Bearer " + key,
+          },
+          body: JSON.stringify({ tableId: id }),
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) throw new Error(data.error || "Error");
+      } catch (err) {
+        alert("Error: " + (err?.message || err));
       }
     });
 
