@@ -77,9 +77,17 @@
       const handStateRef = doc(db, 'tables', tableId, 'hand', 'state');
       if (window.jamlog) window.jamlog.push('hand.state.sub.start');
       unsubHandState = onSnapshot(handStateRef, (snap) => {
-        handState = snap.exists() ? snap.data() : null;
-        renderSeats();
-        if (window.jamlog) window.jamlog.push('hand.state.sub.ok', { handNo: handState?.handNo ?? null });
+        if (snap.exists()) {
+          handState = snap.data();
+          renderSeats();
+          if (window.jamlog) window.jamlog.push('hand.state.sub.ok', { handNo: handState?.handNo ?? 0 });
+        } else {
+          handState = null;
+          renderSeats();
+          if (window.jamlog) window.jamlog.push('hand.state.sub.empty');
+        }
+      }, (err) => {
+        if (window.jamlog) window.jamlog.push('hand.state.sub.error', { code: err?.code, message: err?.message });
       });
       onSnapshot(tableRef, (snap) => {
         debugLog('table.tableSnapshot', snap.exists());
