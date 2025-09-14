@@ -6,6 +6,15 @@ service cloud.firestore {
       return request.auth != null && request.auth.token.admin == true;
     }
 
+    // Helpers for key shape validation
+    function onlyAllowedKeys(allowed) {
+      return request.resource.data.keys().hasOnly(allowed);
+    }
+
+    function hasAllKeys(required) {
+      return request.resource.data.keys().hasAll(required);
+    }
+
     // DEV: players are open until Auth is added.
     match /players/{playerId} {
       allow read, write: if true;
@@ -15,10 +24,15 @@ service cloud.firestore {
       // Players (anyone) can read active tables for Lobby/Table
       allow read: if resource.data.active == true;
 
-      // Dev-safe create: any authenticated user (anon OK) may create a table BUT only with whitelisted keys
+      // Dev-safe create: any authenticated user (anon OK) may create a table but only with whitelisted keys
       allow create: if request.auth != null
-        && request.resource.data.keys().hasAll(['active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn'])
-        && request.resource.data.keys().subsetOf(['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn','deletedAt']);
+        && hasAllKeys(['active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn'])
+        && onlyAllowedKeys(['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn','deletedAt'])
+        && request.resource.data.active is bool
+        && request.resource.data.maxSeats is int
+        && request.resource.data.activeSeatCount is int
+        && request.resource.data.blinds is map
+        && request.resource.data.buyIn is map;
 
       // Update: players may ONLY change activeSeatCount; admins may archive (active/deletedAt)
       allow update: if (request.auth != null
@@ -33,10 +47,10 @@ service cloud.firestore {
         // Claim/leave: only limited fields may change; anon auth permitted
         allow create: if request.auth != null
           && request.resource.data.keys().hasAll(['seatIndex'])
-          && request.resource.data.keys().subsetOf(['seatIndex','occupiedBy','displayName','sittingOut','stackCents','updatedAt']);
+          && request.resource.data.keys().hasOnly(['seatIndex','occupiedBy','displayName','sittingOut','stackCents','updatedAt']);
         allow update: if request.auth != null
           && request.resource.data.diff(resource.data).changedKeys()
-               .subsetOf(['occupiedBy','displayName','sittingOut','stackCents','updatedAt'])
+               .hasOnly(['occupiedBy','displayName','sittingOut','stackCents','updatedAt'])
           && request.resource.data.seatIndex == resource.data.seatIndex; // seat index immutable
         allow delete: if false;
       }
