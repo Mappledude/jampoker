@@ -13,8 +13,31 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cleanup stale preview channels (>expired)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          set -e
+          # List channels (singular subcommand; correct site id; pass token)
+          npx firebase-tools@latest hosting:channel:list \
+            --site jampoker --project jam-poker --json --token "$FIREBASE_TOKEN" > channels.json \
+            || { echo "channel:list failed (non-blocking)"; exit 0; }
+
+          # Compute expired channels
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('channels.json','utf8'));const now=Date.now();const ids=(j.result||[]).filter(c=>c.expireTime && new Date(c.expireTime).getTime()<now).map(c=>c.name.split('/').pop());console.log('Stale:', ids);fs.writeFileSync('stale.txt', ids.join('\\n'));"
+
+          # Delete expired channels (non-blocking on errors)
+          if [ -s stale.txt ]; then
+            while IFS= read -r id; do
+              [ -z "$id" ] || npx firebase-tools@latest hosting:channel:delete \
+                "$id" --site jampoker --project jam-poker --force --token "$FIREBASE_TOKEN" \
+                || echo "delete failed for $id (continuing)"
+            done < stale.txt
+          fi
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
           projectId: jam-poker
+          channelId: pr-${{ github.event.pull_request.number }}
+          expires: 3d
