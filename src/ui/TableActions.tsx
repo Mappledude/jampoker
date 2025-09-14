@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HandState } from '../poker/handMath';
 import { telemetry } from '../telemetry';
-import { computeTurn } from '../lib/turn';
-import { findMySeat, toSeatNumber } from '../lib/seats';
+import { computeTurnFromDoc } from '../lib/turn';
+import { toSeatNumber } from '../lib/seats';
 import { toast } from 'react-toastify';
 import { useLatest } from './hooks/useLatest';
 
@@ -32,13 +32,10 @@ export const TableActions: React.FC<TableActionsProps> = ({
   onFold,
 }) => {
   const [pending, setPending] = useState(false);
-  const mySeat = findMySeat(seats as any[], uid);
-  const seatObj = seats.find((s) => toSeatNumber((s as any)?.seat ?? (s as any)?.id) === mySeat);
-  const myStack = mySeat == null ? 0 : seatObj?.stackCents ?? 0;
-  const turn = computeTurn(
+  const turn = computeTurnFromDoc(
     handState && (handState as any)?.loaded ? (handState as any) : null,
-    mySeat,
-    myStack
+    seats as any[],
+    uid
   );
   const handRef = useLatest(handState);
   const seatsRef = useLatest(seats);
@@ -59,7 +56,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
   useEffect(() => {
     telemetry('turn.snapshot', {
       myUid: uid,
-      mySeat,
+      mySeat: turn.mySeat,
       toActSeat: toSeatNumber(handState?.toActSeat),
       seats: (seats ?? []).map((s: any, i: number) => ({
         i,
@@ -69,7 +66,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
       street: handState?.street,
       handNo: (handState as any)?.handNo,
     });
-  }, [uid, mySeat, handState?.toActSeat, handState?.street, (handState as any)?.handNo, seats]);
+  }, [uid, turn.mySeat, handState?.toActSeat, handState?.street, (handState as any)?.handNo, seats]);
 
   const MIN_DELAY = 400;
   const MAX_DELAY = 600;
@@ -99,20 +96,15 @@ export const TableActions: React.FC<TableActionsProps> = ({
 
   const handlePrimary = async () => {
     const handNow = handRef.current;
-    const seatsNow = seatsRef.current;
-    const mySeatNow = findMySeat(seatsNow as any[], uid);
-    const seatObjNow = (seatsNow ?? []).find(
-      (s: any) => toSeatNumber((s as any)?.seat ?? (s as any)?.id) === mySeatNow
-    );
-    const stackNow = mySeatNow == null ? 0 : seatObjNow?.stackCents ?? 0;
-    const turnNow = computeTurn(
+    const seatsNow = seatsRef.current as any[];
+    const turnNow = computeTurnFromDoc(
       handNow && (handNow as any)?.loaded ? (handNow as any) : null,
-      mySeatNow,
-      stackNow
+      seatsNow,
+      uid
     );
     telemetry('turn.snapshot', {
       myUid: uid,
-      mySeat: mySeatNow,
+      mySeat: turnNow.mySeat,
       toActSeat: turnNow.toActSeat,
       toMatch: turnNow.toMatch,
       myCommit: turnNow.myCommit,
@@ -124,7 +116,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
       telemetry('action.guard', {
         reason: 'not-your-turn',
         myUid: uid,
-        mySeat: mySeatNow,
+        mySeat: turnNow.mySeat,
         toActSeat: turnNow.toActSeat,
         toMatch: turnNow.toMatch,
         myCommit: turnNow.myCommit,
@@ -138,38 +130,33 @@ export const TableActions: React.FC<TableActionsProps> = ({
     lastActionAtRef.current = Date.now();
     try {
       if (turnNow.canCheck) {
-        telemetry('action.check.start', { seat: mySeatNow });
+        telemetry('action.check.start', { seat: turnNow.mySeat });
         await onCheck();
-        telemetry('action.check.ok', { seat: mySeatNow });
+        telemetry('action.check.ok', { seat: turnNow.mySeat });
       } else if (turnNow.canCall) {
-        telemetry('action.call.start', { seat: mySeatNow, amount: turnNow.owe });
+        telemetry('action.call.start', { seat: turnNow.mySeat, amount: turnNow.owe });
         await onCall(turnNow.owe);
-        telemetry('action.call.ok', { seat: mySeatNow, amount: turnNow.owe });
+        telemetry('action.call.ok', { seat: turnNow.mySeat, amount: turnNow.owe });
       }
     } catch (e: any) {
       const reason = e?.message || 'error';
       const event = turnNow.canCheck ? 'action.check.fail' : 'action.call.fail';
-      telemetry(event, { seat: mySeatNow, reason });
+      telemetry(event, { seat: turnNow.mySeat, reason });
       setPending(false);
     }
   };
 
   const handleFold = async () => {
     const handNow = handRef.current;
-    const seatsNow = seatsRef.current;
-    const mySeatNow = findMySeat(seatsNow as any[], uid);
-    const seatObjNow = (seatsNow ?? []).find(
-      (s: any) => toSeatNumber((s as any)?.seat ?? (s as any)?.id) === mySeatNow
-    );
-    const stackNow = mySeatNow == null ? 0 : seatObjNow?.stackCents ?? 0;
-    const turnNow = computeTurn(
+    const seatsNow = seatsRef.current as any[];
+    const turnNow = computeTurnFromDoc(
       handNow && (handNow as any)?.loaded ? (handNow as any) : null,
-      mySeatNow,
-      stackNow
+      seatsNow,
+      uid
     );
     telemetry('turn.snapshot', {
       myUid: uid,
-      mySeat: mySeatNow,
+      mySeat: turnNow.mySeat,
       toActSeat: turnNow.toActSeat,
       toMatch: turnNow.toMatch,
       myCommit: turnNow.myCommit,
@@ -181,7 +168,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
       telemetry('action.guard', {
         reason: 'not-your-turn',
         myUid: uid,
-        mySeat: mySeatNow,
+        mySeat: turnNow.mySeat,
         toActSeat: turnNow.toActSeat,
         toMatch: turnNow.toMatch,
         myCommit: turnNow.myCommit,
@@ -194,11 +181,11 @@ export const TableActions: React.FC<TableActionsProps> = ({
     setPending(true);
     lastActionAtRef.current = Date.now();
     try {
-      telemetry('action.fold.start', { seat: mySeatNow });
+      telemetry('action.fold.start', { seat: turnNow.mySeat });
       await onFold();
-      telemetry('action.fold.ok', { seat: mySeatNow });
+      telemetry('action.fold.ok', { seat: turnNow.mySeat });
     } catch (e: any) {
-      telemetry('action.fold.fail', { seat: mySeatNow, reason: e?.message || 'error' });
+      telemetry('action.fold.fail', { seat: turnNow.mySeat, reason: e?.message || 'error' });
       setPending(false);
     }
   };
@@ -231,7 +218,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
             fontSize: '12px',
           }}
         >
-          Seat: {String(mySeat)} | To act: {String(turn.toActSeat)} | Street: {handState?.street}
+          Seat: {String(turn.mySeat)} | To act: {String(turn.toActSeat)} | Street: {handState?.street}
           <br />
           ToMatch: {turn.toMatch} | MyCommit: {turn.myCommit} | Owe: {turn.owe}
         </div>
