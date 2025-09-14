@@ -38,7 +38,9 @@ export const TableActions: React.FC<TableActionsProps> = ({
     uid
   );
   const myStack = turn.mySeat >= 0 ? Number((seats as any[])[turn.mySeat]?.stackCents ?? 0) : 0;
-  const canAct = turn.toActSeat === turn.mySeat;
+  const seatMatchesUid = turn.mySeat >= 0 && (seats as any[])[turn.mySeat]?.uid === uid;
+  const canAct =
+    seatMatchesUid && turn.toActSeat === turn.mySeat && turn.street !== null;
   const canCheck = canAct && turn.owe === 0;
   const canCall = canAct && turn.owe > 0 && myStack >= turn.owe;
   const canFold = canAct;
