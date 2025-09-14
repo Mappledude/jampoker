@@ -28,7 +28,7 @@
     import { app } from "/firebase-init.js";
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
-      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp,
+      doc, setDoc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp,
       writeBatch, runTransaction, increment, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
@@ -60,8 +60,10 @@
 
     let tableData = null;
     let handData = null;
+    let handState = null;
     let seatData = [];
     let unsubHand = null;
+    let unsubHandState = null;
     let backfillAttempted = false;
     let backfillTimer = null;
     let seatCountTimer = null;
@@ -72,6 +74,13 @@
       errorEl.innerHTML = '<h1>Table not found</h1><a href="/lobby.html">Back to Lobby</a>';
     } else {
       const tableRef = doc(db, 'tables', tableId);
+      const handStateRef = doc(db, 'tables', tableId, 'hand', 'state');
+      if (window.jamlog) window.jamlog.push('hand.state.sub.start');
+      unsubHandState = onSnapshot(handStateRef, (snap) => {
+        handState = snap.exists() ? snap.data() : null;
+        renderSeats();
+        if (window.jamlog) window.jamlog.push('hand.state.sub.ok', { handNo: handState?.handNo ?? null });
+      });
       onSnapshot(tableRef, (snap) => {
         debugLog('table.tableSnapshot', snap.exists());
         if (!snap.exists() || snap.data()?.active === false) {
@@ -212,13 +221,20 @@
       const derivedSeatCount = seatData.filter(s => s.occupiedBy).length;
       const activeSeatCount = t.activeSeatCount ?? 0;
       const desyncLine = seatCountDesync ? `<div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>` : '';
+      const current = getCurrentPlayer();
+      const showStart = (current && seatData.some(s => s.occupiedBy === current.id)) || isDebug();
+      const startBtnHtml = showStart ? `<div style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button></div>` : '';
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
         <div class="small">Buy-in: ${rangeStr}</div>
         <div class="small">Seats: ${derivedSeatCount} / ${t.maxSeats || 0}</div>
         ${desyncLine}
+        ${startBtnHtml}
       `;
+      if (showStart) {
+        document.getElementById('btn-start-hand')?.addEventListener('click', startHand);
+      }
     }
 
     function renderHand() {
@@ -286,6 +302,26 @@
         } else {
           seatEl.innerHTML = '<div class="small">Sit here</div>';
           seatEl.addEventListener('click', () => claimSeat(i));
+        }
+        if (handState) {
+          if (i === handState.dealerSeat) {
+            const b = document.createElement('div');
+            b.className = 'pos-badge dealer';
+            b.textContent = 'D';
+            seatEl.appendChild(b);
+          }
+          if (i === handState.sbSeat) {
+            const b = document.createElement('div');
+            b.className = 'pos-badge sb';
+            b.textContent = 'SB';
+            seatEl.appendChild(b);
+          }
+          if (i === handState.bbSeat) {
+            const b = document.createElement('div');
+            b.className = 'pos-badge bb';
+            b.textContent = 'BB';
+            seatEl.appendChild(b);
+          }
         }
         ring.appendChild(seatEl);
       }
@@ -381,6 +417,43 @@
           else window.jamlog.push('seat.tx.fail.seatWrite', { code: err?.code });
           window.jamlog.push('seat.tx.fail', { seatIndex, code: err?.code, message: err?.message });
         }
+      }
+    }
+
+    async function startHand() {
+      if (window.jamlog) window.jamlog.push('hand.start.click');
+      const occupied = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex).sort((a,b) => a - b);
+      const stateRef = doc(db, 'tables', tableId, 'hand', 'state');
+      try {
+        await awaitAuthReady();
+        let currentState = handState;
+        if (!currentState) {
+          const snap = await getDoc(stateRef);
+          currentState = snap.exists() ? snap.data() : null;
+        }
+        if (occupied.length < 2) {
+          const handNo = typeof currentState?.handNo === 'number' ? currentState.handNo : 0;
+          await setDoc(stateRef, { handNo, dealerSeat: null, sbSeat: null, bbSeat: null, toActSeat: null, updatedAt: serverTimestamp() }, { merge: true });
+          if (window.jamlog) window.jamlog.push('hand.start.fail', { code: 'not-enough-players', message: 'Need 2+ players' });
+          alert('Need 2+ players');
+          return;
+        }
+        const next = (arr, val) => arr[(arr.indexOf(val) + 1) % arr.length];
+        let dealer;
+        if (currentState && occupied.includes(currentState.dealerSeat)) {
+          dealer = next(occupied, currentState.dealerSeat);
+        } else {
+          dealer = occupied[0];
+        }
+        const sb = next(occupied, dealer);
+        const bb = next(occupied, sb);
+        const toAct = next(occupied, bb);
+        const handNo = (typeof currentState?.handNo === 'number' ? currentState.handNo : 0) + 1;
+        await setDoc(stateRef, { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct, updatedAt: serverTimestamp() }, { merge: true });
+        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct });
+      } catch (err) {
+        if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
+        alert('Error starting hand.');
       }
     }
 
