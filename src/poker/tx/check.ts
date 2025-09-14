@@ -7,5 +7,5 @@ export async function check(
   uid: string,
   handNo: number
 ): Promise<void> {
-  await enqueueAction(db, tableId, seat, uid, handNo, { type: 'check' });
+  await enqueueAction(db, tableId, seat, uid, handNo, uid, { type: 'check' });
 }

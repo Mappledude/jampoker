@@ -1,89 +1,91 @@
 import {
-  getFirestore, doc, collection, query, where, orderBy, limit,
-  onSnapshot, runTransaction, serverTimestamp
+  getFirestore,
+  doc,
+  collection,
+  query,
+  where,
+  orderBy,
+  limit,
+  onSnapshot,
+  serverTimestamp,
+  getDoc,
+  updateDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+import {
+  getFunctions,
+  httpsCallable,
+} from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
 
-export function startActionWorker(tableId, adminUid) {
+export function startActionWorker(tableId) {
   const db = getFirestore();
+  const functions = getFunctions();
+  const takeActionTX = httpsCallable(functions, 'takeActionTX');
 
   const q = query(
     collection(db, `tables/${tableId}/actions`),
-    where("applied", "==", false),
-    orderBy("createdAt", "asc"),
+    where('applied', '==', false),
+    orderBy('createdAt', 'asc'),
     limit(1)
   );
 
   return onSnapshot(
     q,
-    (snap) => {
-      snap.docChanges().forEach((ch) => {
-        if (ch.type !== "added") return;
-        applyAction(ch.doc.id).catch((e) =>
-          console.error("srv.action.error", { code: e?.code, message: e?.message })
-        );
-      });
+    async (snap) => {
+      for (const docSnap of snap.docs) {
+        const a = docSnap.data();
+        const actionRef = docSnap.ref;
+        const hsRef = doc(db, `tables/${tableId}/handState/current`);
+        const hsSnap = await getDoc(hsRef);
+        const hs = hsSnap.data();
+        if (!hs || hs.toActSeat !== a.seat) {
+          await updateDoc(actionRef, {
+            applied: true,
+            invalid: true,
+            reason: 'not-your-turn',
+            appliedAt: serverTimestamp(),
+          });
+          continue;
+        }
+        const seatUid = hs?.seats?.[a.seat]?.uid;
+        if (a.actorUid && seatUid && a.actorUid !== seatUid) {
+          console.warn('worker.apply.warn', {
+            reason: 'seat-mismatch',
+            actionId: docSnap.id,
+            seat: a.seat,
+            actorUid: a.actorUid,
+            seatUid,
+          });
+        }
+        try {
+          await takeActionTX({
+            tableId,
+            action: {
+              handNo: a.handNo,
+              seat: a.seat,
+              type: a.type,
+              amountCents: a.amountCents ?? null,
+              actorUid: a.actorUid,
+              createdByUid: a.createdByUid,
+            },
+          });
+          await updateDoc(actionRef, {
+            applied: true,
+            appliedAt: serverTimestamp(),
+          });
+          console.log('worker.apply.ok', { id: docSnap.id, type: a.type, seat: a.seat });
+        } catch (err) {
+          console.error('worker.apply.error', { id: docSnap.id, err: String(err) });
+          await updateDoc(actionRef, {
+            applied: true,
+            invalid: true,
+            reason: 'server-error',
+            appliedAt: serverTimestamp(),
+          });
+        }
+      }
     },
     (err) => {
-      console.error("srv.action.listener_error", { code: err.code, message: err.message });
+      console.error('srv.action.listener_error', { code: err.code, message: err.message });
     }
   );
-
-  async function applyAction(actionId) {
-    const actionRef = doc(db, `tables/${tableId}/actions/${actionId}`);
-    const hsRef = doc(db, `tables/${tableId}/handState/current`);
-
-    await runTransaction(db, async (tx) => {
-      const [aSnap, hsSnap] = await Promise.all([tx.get(actionRef), tx.get(hsRef)]);
-      if (!aSnap.exists()) return;
-      const a = aSnap.data();
-      if (a.applied) return;
-
-      const hs = hsSnap.data();
-      if (!hs) throw new Error("no-handstate");
-      if (a.handNo !== hs.handNo) throw new Error("stale-hand");
-      if (a.seat !== hs.toActSeat) throw new Error("not-your-turn");
-
-      const toMatch = hs.toMatch ?? 0;
-      const commits = { ...(hs.commits ?? {}) };
-      const cur = commits[a.seat] ?? 0;
-
-      const bumpVersion = (hs.version ?? 0) + 1;
-      const nextSeat = hs.toActSeat === 0 ? 1 : 0; // TODO: generalize ring order
-
-      if (a.type === "call") {
-        const delta = Math.max(0, toMatch - cur);
-        commits[a.seat] = cur + delta;
-        tx.update(hsRef, {
-          commits,
-          toActSeat: nextSeat,
-          version: bumpVersion,
-          updatedAt: serverTimestamp()
-        });
-      } else if (a.type === "fold") {
-        tx.update(hsRef, {
-          toActSeat: nextSeat,
-          folded: { ...(hs.folded ?? {}), [a.seat]: true },
-          version: bumpVersion,
-          updatedAt: serverTimestamp()
-        });
-      } else if (a.type === "check") {
-        tx.update(hsRef, {
-          toActSeat: nextSeat,
-          version: bumpVersion,
-          updatedAt: serverTimestamp()
-        });
-      } else {
-        throw new Error(`unsupported-action:${a.type}`);
-      }
-
-      tx.update(actionRef, {
-        applied: true,
-        appliedAt: serverTimestamp(),
-        appliedBy: adminUid
-      });
-    });
-
-    console.log("srv.action.applied", { actionId });
-  }
 }
-
