@@ -73,6 +73,7 @@
       <div style="display:flex;justify-content:space-between;align-items:center;">
         <h2 style="margin-top:0;">Tables</h2>
         <div style="display:flex;gap:8px;align-items:center;">
+          <button id="backfill-seats" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:700;cursor:pointer">Backfill seats</button>
           <button id="delete-all-tables" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-weight:700;cursor:pointer">Delete ALL tables</button>
         </div>
       </div>
@@ -183,10 +184,10 @@
   <script type="module">
     import { app } from "/firebase-init.js";
     import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug } from "/common.js";
-    import {
-      collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
-      doc, updateDoc, deleteDoc, setDoc, writeBatch
-    } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+      import {
+        collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
+        doc, updateDoc, deleteDoc, setDoc, writeBatch, getDocs
+      } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { awaitAuthReady, isAuthed } from "/auth.js";
 
@@ -414,15 +415,51 @@
       }
     });
 
-    const tablesBody = document.getElementById("tables-body");
-    const deleteAllBtn = document.getElementById("delete-all-tables");
+      const tablesBody = document.getElementById("tables-body");
+      const deleteAllBtn = document.getElementById("delete-all-tables");
+      const backfillBtn = document.getElementById("backfill-seats");
 
-    deleteAllBtn?.addEventListener("click", async () => {
-      const conf = prompt("Type DELETE ALL") === "DELETE ALL";
-      if (!conf) return;
-      try {
-        const res = await fetch("/adminDeleteAllTables", { method: "POST" });
-        const data = await res.json();
+      backfillBtn?.addEventListener("click", async () => {
+        try {
+          if (window.jamlog) window.jamlog.push('admin.backfill.start');
+          const snap = await getDocs(query(tablesCol, where("active", "==", true)));
+          let tbls = 0;
+          let seats = 0;
+          for (const tdoc of snap.docs) {
+            const max = tdoc.data()?.maxSeats || 0;
+            const seatsSnap = await getDocs(collection(db, 'tables', tdoc.id, 'seats'));
+            if (seatsSnap.size === 0 && max > 0) {
+              const batch = writeBatch(db);
+              for (let i = 0; i < max; i++) {
+                const sref = doc(db, 'tables', tdoc.id, 'seats', String(i));
+                batch.set(sref, {
+                  seatIndex: i,
+                  occupiedBy: null,
+                  displayName: null,
+                  sittingOut: false,
+                  stackCents: null,
+                  updatedAt: serverTimestamp(),
+                }, { merge: false });
+              }
+              await batch.commit();
+              tbls++;
+              seats += max;
+            }
+          }
+          if (window.jamlog) window.jamlog.push('admin.backfill.ok', { tables: tbls, seats });
+          alert(`Backfilled seats on ${tbls} tables.`);
+        } catch (err) {
+          if (window.jamlog) window.jamlog.push('admin.backfill.fail', { code: err?.code });
+          alert('Error backfilling seats.');
+        }
+      });
+
+      deleteAllBtn?.addEventListener("click", async () => {
+        const conf = prompt("Type DELETE ALL") === "DELETE ALL";
+        if (!conf) return;
+        try {
+          const res = await fetch("/adminDeleteAllTables", { method: "POST" });
+          const data = await res.json();
         if (!res.ok || !data.ok) throw new Error(data.error || "Error");
         alert("All tables deleted.");
       } catch (err) {

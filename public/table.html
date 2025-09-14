@@ -27,7 +27,7 @@
     import { app } from "/firebase-init.js";
     import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
-      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp
+      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp, writeBatch
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
 
@@ -49,11 +49,19 @@
     const seatsEl = document.getElementById('seats');
     const boardEl = document.getElementById('player-board');
     const debugBox = document.getElementById('debug-box');
+    const seedBanner = document.createElement('div');
+    seedBanner.className = 'small';
+    seedBanner.textContent = 'Seeding seats…';
+    seedBanner.style.display = 'none';
+    seatsEl.before(seedBanner);
 
     let tableData = null;
     let handData = null;
     let seatData = [];
     let unsubHand = null;
+    let backfillAttempted = false;
+    let seatCountTimer = null;
+    let seatCountDesync = false;
 
     if (!tableId) {
       errorEl.style.display = 'block';
@@ -90,26 +98,94 @@
           renderHand();
           updateDebug();
         }
-        renderPlayerBoard();
-        updateDebug();
-      });
+          renderPlayerBoard();
+          updateDebug();
+          checkSeatCount();
+        });
 
-      const seatsRef = collection(db, 'tables', tableId, 'seats');
-      onSnapshot(query(seatsRef, orderBy('seatIndex', 'asc')), (snap) => {
-        debugLog('table.seatsSnapshot', snap.size);
-        seatData = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-        showSeatsDebug(tableId, snap.docs);
-        renderSeats();
-        renderHand();
-        renderTableInfo();
-        renderPlayerBoard();
-        updateDebug();
-      });
-    }
+        const seatsRef = collection(db, 'tables', tableId, 'seats');
+        if (window.jamlog) window.jamlog.push('table.seats.sub.started');
+        const qSeats = query(seatsRef, orderBy('seatIndex', 'asc'));
+        onSnapshot(qSeats, (snap) => {
+          debugLog('table.seatsSnapshot', snap.size);
+          if (window.jamlog) window.jamlog.push('table.seats.sub.ok', { count: snap.size });
+          seatData = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+          showSeatsDebug(tableId, snap.docs);
+          renderSeats();
+          renderHand();
+          renderTableInfo();
+          renderPlayerBoard();
+          updateDebug();
+          checkSeatCount();
+        }, (err) => {
+          if (window.jamlog) window.jamlog.push('table.seats.sub.error', { code: err?.code });
+        });
+        setTimeout(checkBackfill, 1500);
+      }
 
     document.addEventListener('change', (e) => {
       if (e.target.id === 'cp-select') renderPlayerBoard();
     });
+
+    function checkBackfill() {
+      if (backfillAttempted) return;
+      if (!tableData) { setTimeout(checkBackfill, 500); return; }
+      if (seatData.length === 0 && (tableData.maxSeats || 0) > 0) {
+        backfillSeats();
+      }
+    }
+
+    async function backfillSeats() {
+      backfillAttempted = true;
+      if (isDebug()) seedBanner.style.display = 'block';
+      try {
+        const batch = writeBatch(db);
+        const max = tableData.maxSeats || 0;
+        for (let i = 0; i < max; i++) {
+          const sref = doc(db, 'tables', tableId, 'seats', String(i));
+          batch.set(sref, {
+            seatIndex: i,
+            occupiedBy: null,
+            displayName: null,
+            sittingOut: false,
+            stackCents: null,
+            updatedAt: serverTimestamp(),
+          }, { merge: false });
+        }
+        await batch.commit();
+        if (window.jamlog) window.jamlog.push('table.seats.backfill.ok', { count: max });
+      } catch (e) {
+        if (window.jamlog) window.jamlog.push('table.seats.backfill.fail', { code: e?.code });
+      } finally {
+        if (isDebug()) seedBanner.style.display = 'none';
+      }
+    }
+
+    function checkSeatCount() {
+      if (!tableData) return;
+      const derived = seatData.filter(s => s.occupiedBy).length;
+      const active = tableData.activeSeatCount ?? 0;
+      if (derived !== active) {
+        if (!seatCountTimer) {
+          seatCountTimer = setTimeout(() => {
+            seatCountTimer = null;
+            const d = seatData.filter(s => s.occupiedBy).length;
+            const a = tableData.activeSeatCount ?? 0;
+            if (d !== a) {
+              seatCountDesync = true;
+              if (window.jamlog) window.jamlog.push('seatcount.desync', { derived: d, activeSeatCount: a });
+              renderTableInfo();
+            }
+          }, 1000);
+        }
+      } else {
+        if (seatCountTimer) { clearTimeout(seatCountTimer); seatCountTimer = null; }
+        if (seatCountDesync) {
+          seatCountDesync = false;
+          renderTableInfo();
+        }
+      }
+    }
 
     function renderTableInfo() {
       if (!tableData) { infoEl.textContent = ''; return; }
@@ -123,14 +199,13 @@
       const rangeStr = `${dollars(minB)}–${dollars(maxB)} (default ${dollars(defB)})`;
       const derivedSeatCount = seatData.filter(s => s.occupiedBy).length;
       const activeSeatCount = t.activeSeatCount ?? 0;
-      if (window.jamlog && derivedSeatCount !== activeSeatCount) {
-        window.jamlog.push('seatcount.status', { activeSeatCount, derived: derivedSeatCount });
-      }
+      const desyncLine = seatCountDesync ? `<div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>` : '';
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
         <div class="small">Buy-in: ${rangeStr}</div>
-        <div class="small">Seats: ${derivedSeatCount} (active: ${activeSeatCount}) / ${t.maxSeats || 0}</div>
+        <div class="small">Seats: ${derivedSeatCount} / ${t.maxSeats || 0}</div>
+        ${desyncLine}
       `;
     }
 
