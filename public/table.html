@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Table</title>
   <link rel="stylesheet" href="/style.css" />
+  <link rel="stylesheet" href="/table.css" />
 </head>
 <body>
   <div class="wrap">
@@ -19,7 +20,7 @@
     <div id="current-hand" class="card" style="margin-top:16px;"></div>
     <div id="seats" class="card" style="margin-top:16px;"></div>
   </div>
-  <div id="player-board" class="card" style="display:none;position:fixed;left:50%;bottom:0;transform:translateX(-50%);min-width:260px;"></div>
+  <div id="player-board" class="card player-board" style="display:none;position:fixed;left:50%;bottom:0;transform:translateX(-50%);min-width:260px;"></div>
   <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
   <script src="/jamlog.js"></script>
   <script type="module" src="/firebase-init.js"></script>
@@ -42,6 +43,8 @@
 
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
+    const variant = params.get('variant') || 'v1';
+    document.body.classList.add(`variant-${variant}`);
     if (window.jamlog) window.jamlog.setTableId(tableId || null);
     const errorEl = document.getElementById('error');
     const infoEl = document.getElementById('table-info');
@@ -259,10 +262,24 @@
     }
 
     function renderSeats() {
-      const rows = seatData
-        .filter((s) => s.occupiedBy)
-        .map((s) => `<div>${s.displayName || '(no name)'} • ${dollars(s.chipStackCents || 0)}</div>`);
-      seatsEl.innerHTML = `<h2 style="margin-top:0;">Seats</h2>${rows.join('') || '<div class="small">(none yet)</div>'}`;
+      const maxSeats = tableData?.maxSeats || seatData.length || 0;
+      const ring = document.createElement('div');
+      ring.className = 'seat-ring';
+      for (let i = 0; i < maxSeats; i++) {
+        const seat = seatData.find((s) => s.seatIndex === i);
+        const seatEl = document.createElement('div');
+        seatEl.className = 'seat';
+        seatEl.style.setProperty('--i', String(i));
+        seatEl.style.setProperty('--n', String(maxSeats));
+        if (seat && seat.occupiedBy) {
+          seatEl.innerHTML = `<div class="name">${seat.displayName || '(no name)'}</div><div class="stack small">${dollars(seat.chipStackCents || 0)}</div>`;
+        } else {
+          seatEl.innerHTML = '<div class="small">Sit here</div>';
+        }
+        ring.appendChild(seatEl);
+      }
+      seatsEl.innerHTML = '';
+      seatsEl.appendChild(ring);
     }
 
     let intentPending = false;
