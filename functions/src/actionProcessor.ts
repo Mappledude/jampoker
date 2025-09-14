@@ -1,5 +1,6 @@
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
 import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { toSeatNumber } from "./lib/seats";
 
 const db = getFirestore();
 
@@ -8,48 +9,27 @@ interface SeatData {
   stackCents: number;
 }
 
-function orderedSeats(seats: SeatData[]): number[] {
-  return seats
-    .map((s) => s.seat)
-    .sort((a, b) => a - b);
+function isEligible(seat: number, seats: SeatData[], hand: any): boolean {
+  const data = seats.find((s) => s.seat === seat);
+  const occupied = !!data;
+  const folded = new Set((hand.folded ?? []).map((n: any) => Number(n)));
+  const allIn = new Set((hand.allIn ?? []).map((n: any) => Number(n)));
+  return (
+    occupied &&
+    !folded.has(seat) &&
+    !allIn.has(seat) &&
+    (data?.stackCents ?? 0) > 0
+  );
 }
 
-function nextActiveLeft(
-  seats: SeatData[],
-  from: number,
-  folded: Set<number>
-): number | null {
-  const order = orderedSeats(seats);
-  const start = order.indexOf(from);
-  if (start === -1) return null;
+function nextEligible(seat: number, seats: SeatData[], hand: any): number {
+  const order = seats.map((s) => s.seat).sort((a, b) => a - b);
+  const start = order.indexOf(seat);
   for (let i = 1; i <= order.length; i++) {
     const seatNum = order[(start + i) % order.length];
-    const data = seats.find((s) => s.seat === seatNum);
-    if (!data) continue;
-    if (folded.has(seatNum)) continue;
-    if (data.stackCents <= 0) continue;
-    return seatNum;
+    if (isEligible(seatNum, seats, hand)) return seatNum;
   }
-  return null;
-}
-
-function firstActiveLeftOfDealer(
-  seats: SeatData[],
-  dealer: number,
-  folded: Set<number>
-): number | null {
-  const order = orderedSeats(seats);
-  const start = order.indexOf(dealer);
-  if (start === -1) return null;
-  for (let i = 1; i <= order.length; i++) {
-    const seatNum = order[(start + i) % order.length];
-    const data = seats.find((s) => s.seat === seatNum);
-    if (!data) continue;
-    if (folded.has(seatNum)) continue;
-    if (data.stackCents <= 0) continue;
-    return seatNum;
-  }
-  return null;
+  return seat;
 }
 
 function everyoneMatched(
@@ -79,13 +59,9 @@ function nextStreet(street: string): string {
   }
 }
 
-function advanceStreet(
-  hand: any,
-  seats: SeatData[],
-  folded: Set<number>
-) {
+function advanceStreet(hand: any, seats: SeatData[]) {
   const street = nextStreet(hand.street);
-  const toAct = firstActiveLeftOfDealer(seats, hand.dealerSeat, folded);
+  const toAct = nextEligible(hand.dealerSeat, seats, hand);
   return {
     street,
     betToMatchCents: 0,
@@ -109,7 +85,17 @@ export const onActionCreated = onDocumentCreated(
 
     const tableRef = db.collection("tables").doc(tableId);
     const handRef = tableRef.collection("handState").doc("current");
-    const seatRef = tableRef.collection("seats").doc(String(action.seat));
+    const actorSeat = toSeatNumber(action.seat);
+    const seatRef = tableRef.collection("seats").doc(String(actorSeat ?? -1));
+    if (actorSeat == null) {
+      await event.data?.ref.update({
+        status: "rejected",
+        reason: "not-your-turn",
+        expectedSeat: null,
+        actualSeat: null,
+      });
+      return;
+    }
 
     try {
       const actionRef = event.data!.ref;
@@ -120,7 +106,16 @@ export const onActionCreated = onDocumentCreated(
           tx.get(seatRef),
           tx.get(tableRef.collection("seats")),
         ]);
-        if (!handSnap.exists || !seatSnap.exists) return;
+        if (!handSnap.exists || !seatSnap.exists) {
+          tx.update(actionRef, {
+            status: "rejected",
+            reason: "not-your-turn",
+            expectedSeat: handSnap.exists ? (handSnap.data() as any).toActSeat : null,
+            actualSeat: actorSeat,
+          });
+          rejected = true;
+          return;
+        }
         const hand = handSnap.data() as any;
         const seat = seatSnap.data() as any;
         const seats: SeatData[] = seatsSnap.docs.map((d) => ({
@@ -128,30 +123,40 @@ export const onActionCreated = onDocumentCreated(
           stackCents: d.data().stackCents ?? 0,
         }));
 
-        const foldedSet = new Set<number>(hand.folded ?? []);
-        if (action.seat !== hand.toActSeat || foldedSet.has(action.seat)) {
+        if (!isEligible(hand.toActSeat, seats, hand)) {
+          const fixed = nextEligible(hand.toActSeat, seats, hand);
+          tx.update(handRef, { toActSeat: fixed });
+          hand.toActSeat = fixed;
+        }
+
+        const foldedSet = new Set<number>((hand.folded ?? []).map((n: any) => Number(n)));
+        if (
+          actorSeat == null ||
+          actorSeat !== hand.toActSeat ||
+          foldedSet.has(actorSeat)
+        ) {
           tx.update(actionRef, {
             status: "rejected",
             reason: "not-your-turn",
             expectedSeat: hand.toActSeat,
-            actualSeat: action.seat,
+            actualSeat: actorSeat,
           });
           rejected = true;
           return;
         }
 
         const commits = hand.commits || {};
-        const playerCommit = commits?.[action.seat] ?? commits?.[String(action.seat)] ?? 0;
+        const playerCommit = Number(commits[String(actorSeat)] ?? 0);
         const betToMatch = hand.betToMatchCents || 0;
 
         switch (action.type) {
           case "check": {
             if (betToMatch !== playerCommit) return;
             if (everyoneMatched(commits, betToMatch, seats, foldedSet)) {
-              const adv = advanceStreet(hand, seats, foldedSet);
+              const adv = advanceStreet(hand, seats);
               tx.update(handRef, adv);
             } else {
-              const next = nextActiveLeft(seats, action.seat, foldedSet);
+              const next = nextEligible(actorSeat, seats, hand);
               tx.update(handRef, {
                 toActSeat: next,
                 updatedAt: FieldValue.serverTimestamp(),
@@ -165,12 +170,12 @@ export const onActionCreated = onDocumentCreated(
             if (seat.stackCents < need) throw new Error("insufficient-stack");
             const newStack = seat.stackCents - need;
             const newCommit = playerCommit + need;
-            const commitPath = `commits.${action.seat}`;
-            if (everyoneMatched({ ...commits, [action.seat]: newCommit }, betToMatch, seats, foldedSet)) {
-              const adv = advanceStreet(hand, seats, foldedSet);
+            const commitPath = `commits.${actorSeat}`;
+            if (everyoneMatched({ ...commits, [actorSeat]: newCommit }, betToMatch, seats, foldedSet)) {
+              const adv = advanceStreet(hand, seats);
               tx.update(handRef, { ...adv, [commitPath]: newCommit });
             } else {
-              const next = nextActiveLeft(seats, action.seat, foldedSet);
+              const next = nextEligible(actorSeat, seats, hand);
               tx.update(handRef, {
                 [commitPath]: newCommit,
                 toActSeat: next,
