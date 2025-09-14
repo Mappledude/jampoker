@@ -28,6 +28,7 @@
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
+    import { startActionWorker } from "/adminWorker.js";
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
       doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
@@ -66,6 +67,11 @@
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
     const fns = getFunctions(app);
+    auth.onAuthStateChanged((u) => {
+      if (!u) return;
+      if (!tableId) return;
+      startActionWorker(tableId, u.uid);
+    });
     document.body.classList.add('variant-v1');
     if (window.jamlog) window.jamlog.setTableId(tableId || null);
     const errorEl = document.getElementById('error');
@@ -324,7 +330,7 @@
         startBtn.disabled = handActive || !enable;
         if (!startBtn.disabled) {
           startBtn.removeAttribute('title');
-          startBtn.addEventListener('click', startHand);
+          startBtn.addEventListener('click', startHand, { once: true });
         } else if (handActive) {
           startBtn.title = 'Hand already in progress';
         }

@@ -5,8 +5,9 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    function isAdmin() {
-      return request.auth != null && request.auth.token.admin == true;
+    function isAdmin(tableId) {
+      return request.auth != null
+        && get(/databases/$(database)/documents/tables/$(tableId)).data.createdByUid == request.auth.uid;
     }
 
 
@@ -41,14 +42,14 @@ service cloud.firestore {
       // Update: players may ONLY change activeSeatCount; admins may archive (active/deletedAt)
       allow update: if (request.auth != null
                         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['activeSeatCount']))
-                    || (isAdmin() && request.resource.data.diff(resource.data).changedKeys().hasOnly(['active','deletedAt']))
+                    || (isAdmin(tableId) && request.resource.data.diff(resource.data).changedKeys().hasOnly(['active','deletedAt']))
                     || (request.auth != null
                         && resource.data.createdByUid == null
                         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['createdByUid'])
                         && request.resource.data.createdByUid == request.auth.uid);
 
       // Delete: keep admin-only
-      allow delete: if isAdmin();
+      allow delete: if isAdmin(tableId);
 
       match /seats/{seatId} {
         allow read: if true;
@@ -65,21 +66,14 @@ service cloud.firestore {
 
       // Canonical hand state path:
       match /handState/{docId} {
-        allow read: if authed();
+        allow read: if true;
         // Only admins may directly modify hand state; players enqueue actions instead
-        allow write: if isAdmin();
+        allow write: if isAdmin(tableId);
       }
 
       match /actions/{actionId} {
-        allow read: if false;
-        allow create: if authed()
-          && request.resource.data.createdByUid == request.auth.uid
-          && request.resource.data.keys().hasOnly([
-            'handNo', 'seat', 'type', 'amountCents', 'createdByUid', 'createdAt'
-          ])
-          && request.resource.data.handNo is int
-          && request.resource.data.seat is int
-          && request.resource.data.type in ['check','call','bet','raise','fold'];
+        allow read: if true;
+        allow create: if request.auth != null;
         allow update, delete: if false;
       }
     }
