@@ -1,7 +1,6 @@
 import { onCall, HttpsError, CallableRequest } from 'firebase-functions/v2/https';
-import { getFirestore, FieldValue } from 'firebase-admin/firestore';
-
-const db = getFirestore();
+import { FieldValue } from 'firebase-admin/firestore';
+import { db } from './admin';
 
 function nextLiveSeat(seats: any[], hand: any, start: number): number {
   const total = seats.length;
@@ -32,7 +31,7 @@ export const leaveSeatTX = onCall(async (request: CallableRequest<any>) => {
     ]);
 
     const table = tableSnap.data();
-    const hand = handSnap.data();
+    const hand = handSnap.data() as any;
     const user = userSnap.data();
     if (!table || !user) throw new HttpsError('failed-precondition', 'missing-data');
 
@@ -41,20 +40,29 @@ export const leaveSeatTX = onCall(async (request: CallableRequest<any>) => {
 
     const seat = table.seats[seatIdx];
     const stackCents = seat.stackCents ?? 0;
-    const wallet = (user.walletCents ?? 0) + stackCents;
 
     const seats = table.seats.slice();
-    seats[seatIdx] = { seat: seatIdx, uid: null, stackCents: 0 };
 
-    const handUpdate: any = {};
-    if (hand && hand.toActSeat === seatIdx) {
-      handUpdate.toActSeat = nextLiveSeat(seats, hand, seatIdx);
-      handUpdate.updatedAt = FieldValue.serverTimestamp();
+    if (!handSnap.exists) {
+      const bank = (user.bankCents ?? 0) + stackCents;
+      seats[seatIdx] = { seat: seatIdx, uid: null, stackCents: 0 };
+      tx.update(userRef, { bankCents: bank });
+      tx.update(tableRef, {
+        seats,
+        activeSeatCount: Math.max(0, (table.activeSeatCount ?? 1) - 1),
+      });
+      return;
     }
 
-    tx.update(userRef, { walletCents: wallet });
-    tx.update(tableRef, { seats, activeSeatCount: Math.max(0, (table.activeSeatCount ?? 1) - 1) });
-    if (handSnap.exists) tx.update(handRef, handUpdate);
+    const handUpdate: any = { updatedAt: FieldValue.serverTimestamp() };
+    const folded = new Set((hand.folded ?? []).map((n: any) => Number(n)));
+    if (!folded.has(seatIdx)) handUpdate.folded = FieldValue.arrayUnion(seatIdx);
+    if (hand.toActSeat === seatIdx) {
+      handUpdate.toActSeat = nextLiveSeat(seats, hand, seatIdx);
+    }
+    seats[seatIdx] = { ...seat, leaving: true, sittingOut: true };
+    tx.update(handRef, handUpdate);
+    tx.update(tableRef, { seats });
   });
 });
 

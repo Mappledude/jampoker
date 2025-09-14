@@ -16,6 +16,10 @@ export function computeLiveTurn(
   const commits = handDoc?.commits ?? {};
   const myCommit = commits[String(mySeat)] ?? 0;
   const toMatch = handDoc?.betToMatchCents ?? 0;
+  const potCents = Object.values(commits).reduce(
+    (sum: number, v: any) => sum + Number(v || 0),
+    0
+  );
   return {
     myUid: authUid,
     mySeat,
@@ -25,6 +29,7 @@ export function computeLiveTurn(
     toMatch,
     myCommit,
     owe: Math.max(0, toMatch - myCommit),
+    potCents,
   };
 }
 

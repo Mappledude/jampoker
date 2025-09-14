@@ -1,14 +1,13 @@
 // Cloud Functions: auto-start hands, dealer rotation, next-dealer variant
-import { initializeApp } from "firebase-admin/app";
-import { getFirestore, FieldValue, DocumentReference, Transaction, CollectionReference } from "firebase-admin/firestore";
+import { FieldValue, DocumentReference, Transaction, CollectionReference } from "firebase-admin/firestore";
+import { db } from "./admin";
 import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentWritten, onDocumentUpdated, onDocumentCreated } from "firebase-functions/v2/firestore";
 
 export { takeActionTX } from "./takeActionTX";
 export { leaveSeatTX } from "./leaveSeatTX";
+export { onHandEndCleanup } from "./handEnd";
 
-initializeApp();
-const db = getFirestore();
 
 function getTableBlinds(table: any) {
   return {

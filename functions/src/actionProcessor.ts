@@ -1,8 +1,7 @@
 import { onDocumentCreated } from "firebase-functions/v2/firestore";
-import { getFirestore, FieldValue } from "firebase-admin/firestore";
+import { FieldValue } from "firebase-admin/firestore";
 import { toSeatNumber } from "./lib/seats";
-
-const db = getFirestore();
+import { db } from "./admin";
 
 interface SeatData {
   seat: number;
