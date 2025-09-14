@@ -50,6 +50,21 @@ export const TableActions: React.FC<TableActionsProps> = ({
   }, [turn.canAct, turn.canCheck, turn.canCall, turn.canBet, turn.canFold]);
 
   useEffect(() => {
+    telemetry('turn.snapshot', {
+      myUid: uid,
+      mySeat,
+      toActSeat: toSeatNumber(handState?.toActSeat),
+      seats: (seats ?? []).map((s: any, i: number) => ({
+        i,
+        seat: toSeatNumber((s as any)?.seat ?? i),
+        uid: (s as any)?.uid,
+      })),
+      street: handState?.street,
+      handNo: (handState as any)?.handNo,
+    });
+  }, [uid, mySeat, handState?.toActSeat, handState?.street, (handState as any)?.handNo, seats]);
+
+  useEffect(() => {
     if (!pending) return;
     const updated: any = handState && (handState as any).updatedAt;
     if (updated?.toMillis && updated.toMillis() > lastActionAtRef.current) {
