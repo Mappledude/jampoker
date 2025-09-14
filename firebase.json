@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "jampoker",
+    "site": "jam-poker",
     "public": "public",
     "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
     "rewrites": [
