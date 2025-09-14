@@ -28,7 +28,7 @@
     import { app } from "/firebase-init.js";
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
-      doc, setDoc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp,
+      doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
       writeBatch, runTransaction, increment, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
@@ -57,33 +57,44 @@
     seedBanner.textContent = 'Seeding seats…';
     seedBanner.style.display = 'none';
     seatsEl.before(seedBanner);
+    const noHandBanner = document.createElement('div');
+    noHandBanner.className = 'small';
+    noHandBanner.textContent = 'No hand in progress. Start Hand.';
+    noHandBanner.style.display = 'none';
+    seatsEl.before(noHandBanner);
 
     let tableData = null;
     let handData = null;
     let handState = null;
     let seatData = [];
+    let mySeatIndex = null;
+    const foldedSeats = new Set();
     let unsubHand = null;
     let unsubHandState = null;
     let backfillAttempted = false;
     let backfillTimer = null;
     let seatCountTimer = null;
     let seatCountDesync = false;
+    const tableRef = tableId ? doc(db, 'tables', tableId) : null;
+    const handRef = tableId ? doc(db, 'tables', tableId, 'hand', 'state') : null;
 
     if (!tableId) {
       errorEl.style.display = 'block';
       errorEl.innerHTML = '<h1>Table not found</h1><a href="/lobby.html">Back to Lobby</a>';
     } else {
-      const tableRef = doc(db, 'tables', tableId);
-      const handStateRef = doc(db, 'tables', tableId, 'hand', 'state');
       if (window.jamlog) window.jamlog.push('hand.state.sub.start');
-      unsubHandState = onSnapshot(handStateRef, (snap) => {
+      unsubHandState = onSnapshot(handRef, (snap) => {
         if (snap.exists()) {
           handState = snap.data();
+          noHandBanner.style.display = 'none';
           renderSeats();
+          renderPlayerBoard();
           if (window.jamlog) window.jamlog.push('hand.state.sub.ok', { handNo: handState?.handNo ?? 0 });
         } else {
           handState = null;
           renderSeats();
+          renderPlayerBoard();
+          noHandBanner.style.display = '';
           if (window.jamlog) window.jamlog.push('hand.state.sub.empty');
         }
       }, (err) => {
@@ -431,17 +442,16 @@
     async function startHand() {
       if (window.jamlog) window.jamlog.push('hand.start.click');
       const occupied = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex).sort((a,b) => a - b);
-      const stateRef = doc(db, 'tables', tableId, 'hand', 'state');
       try {
         await awaitAuthReady();
         let currentState = handState;
         if (!currentState) {
-          const snap = await getDoc(stateRef);
+          const snap = await getDoc(handRef);
           currentState = snap.exists() ? snap.data() : null;
         }
         if (occupied.length < 2) {
           const handNo = typeof currentState?.handNo === 'number' ? currentState.handNo : 0;
-          await setDoc(stateRef, { handNo, dealerSeat: null, sbSeat: null, bbSeat: null, toActSeat: null, updatedAt: serverTimestamp() }, { merge: true });
+          await setDoc(handRef, { handNo, dealerSeat: null, sbSeat: null, bbSeat: null, toActSeat: null, updatedAt: serverTimestamp() }, { merge: true });
           if (window.jamlog) window.jamlog.push('hand.start.fail', { code: 'not-enough-players', message: 'Need 2+ players' });
           alert('Need 2+ players');
           return;
@@ -453,78 +463,156 @@
         } else {
           dealer = occupied[0];
         }
-        const sb = next(occupied, dealer);
-        const bb = next(occupied, sb);
-        const toAct = next(occupied, bb);
+        const sbSeat = next(occupied, dealer);
+        const bbSeat = next(occupied, sbSeat);
+        const toActSeat = next(occupied, bbSeat);
         const handNo = (typeof currentState?.handNo === 'number' ? currentState.handNo : 0) + 1;
-        await setDoc(stateRef, { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct, updatedAt: serverTimestamp() }, { merge: true });
-        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct });
+        const sb = tableData?.blinds?.sbCents || 0;
+        const bb = tableData?.blinds?.bbCents || 0;
+        const commits = {};
+        commits[String(sbSeat)] = sb;
+        commits[String(bbSeat)] = bb;
+        foldedSeats.clear();
+        await setDoc(handRef, {
+          handNo,
+          dealerSeat: dealer,
+          sbSeat,
+          bbSeat,
+          street: 'preflop',
+          betToMatchCents: bb,
+          commits,
+          lastAggressorSeat: bbSeat,
+          toActSeat,
+          updatedAt: serverTimestamp(),
+        }, { merge: true });
+        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street: 'preflop' });
       } catch (err) {
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
         alert('Error starting hand.');
       }
     }
 
-    let intentPending = false;
-    async function renderPlayerBoard() {
+    function commitOf(state, seat){ return Number(state.commits?.[String(seat)] || 0); }
+    function everyoneMatched(state, occupiedSeats){
+      const target = state.betToMatchCents || 0;
+      return occupiedSeats.every(si => commitOf(state, si) >= target || foldedSeats.has(si));
+    }
+    function nextOccupiedAfter(fromSeat, opts = {}) {
+      const occ = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex).sort((a,b)=>a-b);
+      if (occ.length === 0) return null;
+      const start = occ.indexOf(fromSeat);
+      for (let i=1; i<=occ.length; i++) {
+        const seat = occ[(start + i) % occ.length];
+        if (opts.skipFolded && foldedSeats.has(seat)) continue;
+        return seat;
+      }
+      return null;
+    }
+    function nextToAct(state, fromSeat){ return nextOccupiedAfter(fromSeat, { skipFolded:true }); }
+
+    function renderPlayerBoard() {
       const current = getCurrentPlayer();
-      if (!current) { boardEl.style.display = 'none'; return; }
-      const seat = seatData.find(s => s.occupiedBy === current.id);
+      mySeatIndex = seatData.find(s => s.occupiedBy === current?.id)?.seatIndex ?? null;
+      const occupiedSeats = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex);
+      if (!current || mySeatIndex == null) { boardEl.style.display = 'none'; return; }
       boardEl.style.display = 'block';
-      if (!seat) {
-        boardEl.innerHTML = '<div class="small" style="text-align:center;">Not seated — pick a seat to play</div>';
+      boardEl.innerHTML = '<div style="display:flex; gap:8px; justify-content:center;"><button id="btn-check">Check</button><button id="btn-call">Call</button><button id="btn-fold">Fold</button></div><div style="display:flex; justify-content:center; margin-top:8px;"><button id="btn-leave-seat">Leave seat</button></div>';
+      const checkBtn = document.getElementById('btn-check');
+      const callBtn = document.getElementById('btn-call');
+      const foldBtn = document.getElementById('btn-fold');
+      const leaveBtn = document.getElementById('btn-leave-seat');
+      let reason = 'ok';
+      let enable = handState && handState.street === 'preflop' && handState.toActSeat === mySeatIndex && !foldedSeats.has(mySeatIndex);
+      if (!handState || handState.street !== 'preflop') { reason = 'no-hand'; enable = false; }
+      else if (handState.toActSeat !== mySeatIndex || foldedSeats.has(mySeatIndex)) { reason = 'not-your-turn'; enable = false; }
+      const tooltip = reason === 'no-hand' ? 'Start Hand first' : 'Waiting for your turn';
+      [checkBtn, callBtn, foldBtn].forEach(b => { b.disabled = !enable; if (!enable) b.title = tooltip; else b.removeAttribute('title'); });
+      if (window.jamlog) window.jamlog.push('action.guard', { reason });
+      leaveBtn.addEventListener('click', () => leaveSeat(mySeatIndex));
+      if (enable) {
+        const myCommit = commitOf(handState, mySeatIndex);
+        const target = handState.betToMatchCents || 0;
+        checkBtn.disabled = myCommit !== target;
+        callBtn.disabled = myCommit >= target;
+        if (handState.street === 'preflop' && mySeatIndex === handState.bbSeat && myCommit === target) {
+          checkBtn.style.fontWeight = '700';
+        } else {
+          checkBtn.style.fontWeight = '';
+        }
+        checkBtn.addEventListener('click', () => handleCheck(occupiedSeats));
+        callBtn.addEventListener('click', () => handleCall());
+        foldBtn.addEventListener('click', () => handleFold());
+      }
+    }
+
+    async function handleCheck(occupiedSeats) {
+      if (handState?.toActSeat !== mySeatIndex) {
+        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'not-your-turn' });
         return;
       }
-      const folded = handData?.folded || {};
-      const isActor = handData && seat.seatIndex === handData.actorSeatNum && !folded[current.id] && (seat.stackCents > 0);
-      const toCall = handData?.toCallCents || 0;
-      const minRaise = handData?.minRaiseCents || 0;
-      const callLabel = toCall > 0 ? `Call ${dollars(toCall)}` : 'Check';
-      const raiseLabel = `Min-Raise ${dollars(minRaise)}`;
-      const actionsHtml = isActor ? `
-        <div style="display:flex; gap:8px; flex-wrap:wrap; justify-content:center; margin-top:8px;">
-          <button id="btn-fold">Fold</button>
-          <button id="btn-call">${callLabel}</button>
-          <button id="btn-raise">${raiseLabel}</button>
-        </div>
-      ` : '<div class="small" style="text-align:center;margin-top:8px;">Waiting…</div>';
-      const stackLine = `<div class="small" style="text-align:center;">Stack: ${formatCents(seat.stackCents || 0)}</div>`;
-      boardEl.innerHTML = `
-        ${stackLine}
-        <div style="display:flex; justify-content:center; gap:8px;">
-          <span class="card-chip">[ ?? ]</span>
-          <span class="card-chip">[ ?? ]</span>
-        </div>
-        ${actionsHtml}
-        <div style="display:flex; justify-content:center; margin-top:8px;">
-          <button id="btn-leave-seat">Leave seat</button>
-        </div>
-      `;
-      const leaveBtn = document.getElementById('btn-leave-seat');
-      leaveBtn.addEventListener('click', () => leaveSeat(seat.seatIndex));
-      if (isActor) {
-        const foldBtn = document.getElementById('btn-fold');
-        const callBtn = document.getElementById('btn-call');
-        const raiseBtn = document.getElementById('btn-raise');
-        const disable = (d) => { foldBtn.disabled = callBtn.disabled = raiseBtn.disabled = d; };
-        const intentsCol = collection(db, 'tables', tableId, 'hands', tableData.currentHandId, 'intents');
-        const send = async (data) => {
-          if (intentPending) return;
-          intentPending = true;
-          disable(true);
-          try {
-            await awaitAuthReady();
-            await addDoc(intentsCol, { ...data, createdAt: serverTimestamp() });
-          } catch (e) {
-            console.error(e);
-          }
-          intentPending = false;
-          disable(false);
-        };
-        foldBtn.addEventListener('click', () => send({ playerId: current.id, type: 'fold' }));
-        callBtn.addEventListener('click', () => send({ playerId: current.id, type: toCall > 0 ? 'call' : 'check' }));
-        raiseBtn.addEventListener('click', () => send({ playerId: current.id, type: 'raise', amountCents: minRaise }));
+      const myCommit = commitOf(handState, mySeatIndex);
+      const target = handState.betToMatchCents || 0;
+      if (myCommit !== target) {
+        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'bet-to-match' });
+        return;
       }
+      if (window.jamlog) window.jamlog.push('action.check.start');
+      try {
+        if (handState.street === 'preflop' && mySeatIndex === handState.bbSeat && everyoneMatched(handState, occupiedSeats)) {
+          await updateDoc(handRef, {
+            street: 'flop',
+            toActSeat: nextOccupiedAfter(handState.dealerSeat, { skipFolded: true }),
+            updatedAt: serverTimestamp(),
+          });
+          if (window.jamlog) window.jamlog.push('action.check.advance', { street: 'flop' });
+        } else {
+          await updateDoc(handRef, {
+            toActSeat: nextToAct(handState, mySeatIndex),
+            updatedAt: serverTimestamp(),
+          });
+          if (window.jamlog) window.jamlog.push('action.check.ok');
+        }
+      } catch (e) { }
+    }
+
+    async function handleCall() {
+      if (handState?.toActSeat !== mySeatIndex) {
+        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'not-your-turn' });
+        return;
+      }
+      const myCommit = commitOf(handState, mySeatIndex);
+      const target = handState.betToMatchCents || 0;
+      if (myCommit >= target) {
+        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'bet-to-match' });
+        return;
+      }
+      const delta = target - myCommit;
+      if (window.jamlog) window.jamlog.push('action.call.start');
+      try {
+        await updateDoc(handRef, {
+          [`commits.${mySeatIndex}`]: myCommit + delta,
+          toActSeat: nextToAct(handState, mySeatIndex),
+          updatedAt: serverTimestamp(),
+        });
+        if (window.jamlog) window.jamlog.push('action.call.ok', { delta });
+      } catch (e) { }
+    }
+
+    async function handleFold() {
+      if (handState?.toActSeat !== mySeatIndex) {
+        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'not-your-turn' });
+        return;
+      }
+      if (window.jamlog) window.jamlog.push('action.fold.start');
+      foldedSeats.add(mySeatIndex);
+      try {
+        await updateDoc(handRef, {
+          toActSeat: nextToAct(handState, mySeatIndex),
+          updatedAt: serverTimestamp(),
+        });
+        if (window.jamlog) window.jamlog.push('action.fold.ok');
+      } catch (e) { }
+      renderPlayerBoard();
     }
 
     function updateDebug() {

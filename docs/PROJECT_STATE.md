@@ -23,6 +23,7 @@
 - **brief-12a** complete — auto-stack on seat claim + stack display
 - **brief-12b** complete — Start Hand button with Dealer/SB/BB badges
 - **brief-12b.execute** done — Start Hand action + hand/state rules
+- **brief-12c.hotfix** complete — guard actions until hand exists + BB Check advances preflop
 
 ## Open Issues / Next Steps
 - Verify **Board UI** renders in /table.html after closing preflop.
