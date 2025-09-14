@@ -1,0 +1,12 @@
+{
+  "name": "jampoker",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "tsx tests/**/*.spec.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.7.0",
+    "typescript": "^5.5.0"
+  }
+}

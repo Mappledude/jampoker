@@ -68,6 +68,19 @@ service cloud.firestore {
         allow read: if authed();
         allow write: if false;
       }
+
+      match /actions/{actionId} {
+        allow read: if false;
+        allow create: if authed()
+          && request.resource.data.createdByUid == request.auth.uid
+          && request.resource.data.keys().hasOnly([
+            'handNo', 'seat', 'type', 'amountCents', 'createdByUid', 'createdAt'
+          ])
+          && request.resource.data.handNo is int
+          && request.resource.data.seat is int
+          && request.resource.data.type in ['check','call','bet','raise','fold'];
+        allow update, delete: if false;
+      }
     }
 
     // Hands are server-managed only.
