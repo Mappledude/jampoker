@@ -242,7 +242,8 @@
       const desyncLine = seatCountDesync ? `<div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>` : '';
       const current = getCurrentPlayer();
       const showStart = (current && seatData.some(s => s.occupiedBy === current.id)) || isDebug();
-      const startBtnHtml = showStart ? `<div style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button></div>` : '';
+      const probeBtnHtml = isDebug() ? `<button id="btn-rules-probe" class="small" style="margin-left:8px;">Rules Probe</button>` : '';
+      const startBtnHtml = showStart ? `<div style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button>${probeBtnHtml}</div>` : '';
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
@@ -253,6 +254,7 @@
       `;
       if (showStart) {
         document.getElementById('btn-start-hand')?.addEventListener('click', startHand);
+        document.getElementById('btn-rules-probe')?.addEventListener('click', () => rulesProbe(tableId));
       }
     }
 
@@ -491,6 +493,16 @@
       } catch (err) {
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
         alert('Error starting hand.');
+      }
+    }
+
+    async function rulesProbe(tableId) {
+      const probeRef = doc(db, 'tables', tableId, 'hand', '_probe');
+      try {
+        await setDoc(probeRef, { updatedAt: serverTimestamp() }, { merge: true });
+        if (window.jamlog) window.jamlog.push('hand.rules.probe.ok');
+      } catch (e) {
+        if (window.jamlog) window.jamlog.push('hand.rules.probe.fail', { code: e.code, message: e.message });
       }
     }
 
