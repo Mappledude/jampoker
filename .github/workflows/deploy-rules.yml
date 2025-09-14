@@ -1,0 +1,15 @@
+name: Deploy Firestore Rules
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy rules only
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          npm i -g firebase-tools@latest
+          firebase deploy --only firestore:rules --project jam-poker --non-interactive --token "$FIREBASE_TOKEN"
