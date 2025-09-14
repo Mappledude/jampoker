@@ -64,7 +64,9 @@
       if (hand) {
         const vLabel = hand.variant === "omaha" ? "Omaha" : "Hold'em";
         banner = `Current Hand: ${vLabel} • Dealer: ${hand.dealerName || ""} • Status: ${hand.status}`;
-        const potCents = Object.values(hand.commits || {}).reduce((a, b) => a + (b || 0), 0);
+        const commits = hand.commits || {};
+        const derivedPot = Object.values(commits).reduce((a, b) => a + (b || 0), 0);
+        const potCents = typeof hand.potCents === 'number' ? hand.potCents : derivedPot;
         potLine = `<div class=\"small\">Pot: ${dollars(potCents)}</div>`;
         stageLine = `<div class=\"small\">Stage: ${stageLabel(hand)}</div>`;
         if (hand.board && hand.board.length) {

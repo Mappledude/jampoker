@@ -95,17 +95,27 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     let updates: any = { updatedAt: FieldValue.serverTimestamp() };
 
     if (kind === 'call') {
-      if (owe <= 0 || mySeat !== hand.toActSeat) {
+      if (mySeat !== hand.toActSeat) {
         throw new HttpsError('failed-precondition', 'cannot-call');
       }
-      commits[key] = myCommit + owe;
-      updates.commits = commits;
-      updates.potCents = sumCommits(commits);
-      const allMatched = actives.every((s) => (commits[String(s)] ?? 0) >= toMatch);
-      if (allMatched && nextSeat === startSeat) {
-        updates = { ...updates, ...advanceStreet(hand, table.seats) };
+      if (owe <= 0) {
+        // treat as check when nothing owed
+        updates.potCents = sumCommits(commits);
+        if (nextSeat === startSeat) {
+          updates = { ...updates, ...advanceStreet(hand, table.seats) };
+        } else {
+          updates.toActSeat = nextSeat;
+        }
       } else {
-        updates.toActSeat = nextSeat;
+        commits[key] = myCommit + owe;
+        updates.commits = commits;
+        updates.potCents = sumCommits(commits);
+        const allMatched = actives.every((s) => (commits[String(s)] ?? 0) >= toMatch);
+        if (allMatched && nextSeat === startSeat) {
+          updates = { ...updates, ...advanceStreet(hand, table.seats) };
+        } else {
+          updates.toActSeat = nextSeat;
+        }
       }
     } else if (kind === 'check') {
       if (owe > 0 || mySeat !== hand.toActSeat) {
