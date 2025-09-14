@@ -43,8 +43,7 @@
 
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
-    const variant = params.get('variant') || 'v1';
-    document.body.classList.add(`variant-${variant}`);
+    document.body.classList.add('variant-v1');
     if (window.jamlog) window.jamlog.setTableId(tableId || null);
     const errorEl = document.getElementById('error');
     const infoEl = document.getElementById('table-info');

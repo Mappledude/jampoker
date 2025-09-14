@@ -17,6 +17,7 @@
 - **brief-11c.hotfix-2** complete — lobby visibility, join flow, player board
 - **brief-11c.hotfix-4** complete — anon auth + join permissions
 - **brief-11c.hotfix-5** complete — admin create table + seat seeding + dev rules
+- **brief-11d** finalized — Table UI locked to variant 1
 - **brief-11e** complete — seat subscription + safe backfill + derived/active guard
 
 ## Open Issues / Next Steps
