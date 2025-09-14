@@ -13,8 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cleanup stale preview channels (>expired)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          npx firebase-tools@latest hosting:channel:list --site jam-poker --project jam-poker --json > channels.json
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('channels.json','utf8'));const now=Date.now();const ids=(j.result||[]).filter(c=>c.expireTime && new Date(c.expireTime).getTime()<now).map(c=>c.name.split('/').pop());console.log('Stale:', ids);fs.writeFileSync('stale.txt', ids.join('\n'));"
+          if [ -s stale.txt ]; then
+            while IFS= read -r id; do
+              [ -z "$id" ] || npx firebase-tools@latest hosting:channel:delete "$id" --site jam-poker --project jam-poker --force
+            done < stale.txt
+          fi
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}'
           projectId: jam-poker
+          channelId: pr-${{ github.event.pull_request.number }}
+          expires: 3d
