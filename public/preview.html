@@ -13,24 +13,22 @@
   </div>
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
-    import { db } from '/common.js';
+    import { db, isDebug } from '/common.js';
     import { collection, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js';
-    const params = new URLSearchParams(window.location.search);
-    const list = document.getElementById('table-list');
-    const tablesRef = collection(db, 'tables');
-    onSnapshot(tablesRef, (snap) => {
-      const rows = [];
-      snap.forEach((doc) => {
-        const t = doc.data();
-        rows.push(`<div style="margin-bottom:8px;">${t.name || doc.id}: 
-          <a href="/table.html?id=${doc.id}&variant=v1" target="_blank">v1</a>
-          <a href="/table.html?id=${doc.id}&variant=v2" target="_blank">v2</a>
-          <a href="/table.html?id=${doc.id}&variant=v3" target="_blank">v3</a>
-          <a href="/table.html?id=${doc.id}&variant=v4" target="_blank">v4</a>
-        </div>`);
+    if (!isDebug()) {
+      window.location.replace('/lobby.html');
+    } else {
+      const list = document.getElementById('table-list');
+      const tablesRef = collection(db, 'tables');
+      onSnapshot(tablesRef, (snap) => {
+        const rows = [];
+        snap.forEach((doc) => {
+          const t = doc.data();
+          rows.push(`<div style="margin-bottom:8px;">${t.name || doc.id}: <a href="/table.html?id=${doc.id}" target="_blank">v1</a></div>`);
+        });
+        list.innerHTML = rows.join('') || 'No active tables.';
       });
-      list.innerHTML = rows.join('') || 'No active tables.';
-    });
+    }
   </script>
 </body>
 </html>
