@@ -12,7 +12,8 @@
     <nav class="nav">
       <span style="font-weight:700;">JamPoker</span>
       <a href="/lobby.html">Lobby</a>
-      <span id="debug-chip" class="small" style="margin-left:auto;cursor:pointer;padding:4px 8px;border:1px solid #334155;border-radius:8px;">Debug: OFF</span>
+      <button id="chat-toggle" class="toolbar-btn" aria-pressed="false" style="margin-left:auto;margin-right:8px;">Chat</button>
+      <span id="debug-chip" class="small" style="cursor:pointer;padding:4px 8px;border:1px solid #334155;border-radius:8px;">Debug: OFF</span>
     </nav>
     <div id="you"></div>
     <div id="error" class="card" style="display:none;"></div>
@@ -20,6 +21,7 @@
     <div id="current-hand" class="card" style="margin-top:16px;"></div>
     <div id="seats" class="card" style="margin-top:16px;"></div>
   </div>
+  <aside id="chat-panel" class="chat-panel card" style="position:fixed;right:16px;bottom:16px;"></aside>
   <div id="player-board" class="card player-board" style="display:none;position:fixed;left:50%;bottom:0;transform:translateX(-50%);min-width:260px;"></div>
   <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
   <script src="/jamlog.js"></script>
@@ -29,7 +31,7 @@
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
       doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
-      writeBatch, runTransaction, increment, getDoc
+      writeBatch, runTransaction, increment, getDoc, addDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady, auth } from "/auth.js";
     import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
@@ -52,6 +54,14 @@
     const debugChip = document.getElementById('debug-chip');
     debugChip.textContent = isDebug() ? 'Debug: ON' : 'Debug: OFF';
     debugChip.addEventListener('click', () => setDebug(!isDebug()));
+    const chatToggle = document.getElementById('chat-toggle');
+    const chatPanel = document.getElementById('chat-panel');
+    let chatOpen = false;
+    chatToggle.addEventListener('click', () => {
+      chatOpen = !chatOpen;
+      chatToggle.setAttribute('aria-pressed', chatOpen ? 'true' : 'false');
+      chatPanel.classList.toggle('open', chatOpen);
+    });
 
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
@@ -81,6 +91,8 @@
     let seatData = [];
     let mySeatIndex = null;
     const foldedSeats = new Set();
+    let pending = null;
+    let pendingTimer = null;
     let unsubHand = null;
     let unsubHandState = null;
     let backfillAttempted = false;
@@ -115,17 +127,25 @@
             handState.bbSeat = toSeatNumber(handState?.bbSeat);
             handState.dealerSeat = toSeatNumber(handState?.dealerSeat);
             noHandBanner.style.display = 'none';
+            if (pending) {
+              pending = null;
+              if (pendingTimer) clearTimeout(pendingTimer);
+            }
             renderSeats();
             renderPlayerBoard();
             if (window.jamlog) window.jamlog.push('hand.state.sub.ok', { handNo: handState?.handNo ?? 0 });
           } else {
-          handState = null;
-          renderSeats();
-          renderPlayerBoard();
-          noHandBanner.style.display = '';
-          if (window.jamlog) window.jamlog.push('hand.state.sub.empty');
-        }
-      });
+            handState = null;
+            if (pending) {
+              pending = null;
+              if (pendingTimer) clearTimeout(pendingTimer);
+            }
+            renderSeats();
+            renderPlayerBoard();
+            noHandBanner.style.display = '';
+            if (window.jamlog) window.jamlog.push('hand.state.sub.empty');
+          }
+        });
       onSnapshot(tableRef, (snap) => {
         debugLog('table.tableSnapshot', snap.exists());
         if (!snap.exists() || snap.data()?.active === false) {
@@ -538,27 +558,10 @@
     }
 
     function commitOf(state, seat){ return Number(state.commits?.[String(seat)] || 0); }
-    function everyoneMatched(state, occupiedSeats){
-      const target = state.betToMatchCents || 0;
-      return occupiedSeats.every(si => commitOf(state, si) >= target || foldedSeats.has(si));
-    }
-    function nextOccupiedAfter(fromSeat, opts = {}) {
-      const occ = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex).sort((a,b)=>a-b);
-      if (occ.length === 0) return null;
-      const start = occ.indexOf(fromSeat);
-      for (let i=1; i<=occ.length; i++) {
-        const seat = occ[(start + i) % occ.length];
-        if (opts.skipFolded && foldedSeats.has(seat)) continue;
-        return seat;
-      }
-      return null;
-    }
-    function nextToAct(state, fromSeat){ return nextOccupiedAfter(fromSeat, { skipFolded:true }); }
 
       function renderPlayerBoard() {
         const current = getCurrentPlayer();
         mySeatIndex = seatData.find(s => s.occupiedBy === current?.id)?.seatIndex ?? null;
-        const occupiedSeats = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex);
         if (!current || mySeatIndex == null) { boardEl.style.display = 'none'; return; }
         const myCommit = handState ? commitOf(handState, mySeatIndex) : 0;
         const toMatch = handState?.betToMatchCents ?? 0;
@@ -572,15 +575,20 @@
           handNo: handState?.handNo || null,
         });
         boardEl.style.display = 'block';
-        boardEl.innerHTML = '<div style="display:flex; gap:8px; justify-content:center;"><button id="btn-check">Check</button><button id="btn-call">Call</button><button id="btn-fold">Fold</button></div><div style="display:flex; justify-content:center; margin-top:8px;"><button id="btn-leave-seat">Leave seat</button></div>';
+        boardEl.innerHTML = '<div style="display:flex; gap:8px; justify-content:center;"><button id="btn-check" class="action-btn" data-action="check">Check</button><button id="btn-call" class="action-btn" data-action="call">Call</button><button id="btn-fold" class="action-btn" data-action="fold">Fold</button></div><div style="display:flex; justify-content:center; margin-top:8px;"><button id="btn-leave-seat">Leave seat</button></div>';
         const checkBtn = document.getElementById('btn-check');
         const callBtn = document.getElementById('btn-call');
         const foldBtn = document.getElementById('btn-fold');
         const leaveBtn = document.getElementById('btn-leave-seat');
+        [checkBtn, callBtn, foldBtn].forEach(b => {
+          b.addEventListener('pointerdown', (e) => e.currentTarget.classList.add('pressed'));
+          ['pointerup','pointercancel'].forEach(ev => b.addEventListener(ev, (e) => e.currentTarget.classList.remove('pressed')));
+        });
         let reason = 'ok';
         let enable = handState && handState.street === 'preflop' && handState.toActSeat === mySeatIndex && !foldedSeats.has(mySeatIndex);
         if (!handState || handState.street !== 'preflop') { reason = 'no-hand'; enable = false; }
         else if (handState.toActSeat !== mySeatIndex || foldedSeats.has(mySeatIndex)) { reason = 'not-your-turn'; enable = false; }
+        if (pending) { reason = 'pending'; enable = false; }
         const tooltip = reason === 'no-hand' ? 'Start Hand first' : 'Waiting for your turn';
         [checkBtn, callBtn, foldBtn].forEach(b => { b.disabled = !enable; if (!enable) b.title = tooltip; else b.removeAttribute('title'); });
         if (window.jamlog) window.jamlog.push('action.guard', {
@@ -603,80 +611,56 @@
           } else {
             checkBtn.style.fontWeight = '';
           }
-          checkBtn.addEventListener('click', () => handleCheck(occupiedSeats));
-          callBtn.addEventListener('click', () => handleCall());
-          foldBtn.addEventListener('click', () => handleFold());
+          checkBtn.addEventListener('click', () => sendAction('check'));
+          callBtn.addEventListener('click', () => sendAction('call'));
+          foldBtn.addEventListener('click', () => sendAction('fold'));
         }
       }
 
-    async function handleCheck(occupiedSeats) {
+    async function sendAction(type) {
+      if (pending) return;
+      if (window.jamlog) window.jamlog.push('ui.action.click', { type, seat: mySeatIndex });
       if (handState?.toActSeat !== mySeatIndex) {
-        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'not-your-turn' });
+        if (window.jamlog) window.jamlog.push('ui.action.blocked', { type, seat: mySeatIndex, reason: 'not-your-turn' });
+        alert("It's not your turn");
         return;
       }
       const myCommit = commitOf(handState, mySeatIndex);
       const target = handState.betToMatchCents || 0;
-      if (myCommit !== target) {
-        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'bet-to-match' });
+      if (type === 'check' && myCommit !== target) {
+        if (window.jamlog) window.jamlog.push('ui.action.blocked', { type, seat: mySeatIndex, reason: 'bet-to-match' });
         return;
       }
-      if (window.jamlog) window.jamlog.push('action.check.start');
-      try {
-        if (handState.street === 'preflop' && mySeatIndex === handState.bbSeat && everyoneMatched(handState, occupiedSeats)) {
-          await updateDoc(handRef, {
-            street: 'flop',
-            toActSeat: nextOccupiedAfter(handState.dealerSeat, { skipFolded: true }),
-            updatedAt: serverTimestamp(),
-          });
-          if (window.jamlog) window.jamlog.push('action.check.advance', { street: 'flop' });
-        } else {
-          await updateDoc(handRef, {
-            toActSeat: nextToAct(handState, mySeatIndex),
-            updatedAt: serverTimestamp(),
-          });
-          if (window.jamlog) window.jamlog.push('action.check.ok');
-        }
-      } catch (e) { }
-    }
-
-    async function handleCall() {
-      if (handState?.toActSeat !== mySeatIndex) {
-        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'not-your-turn' });
+      if (type === 'call' && myCommit >= target) {
+        if (window.jamlog) window.jamlog.push('ui.action.blocked', { type, seat: mySeatIndex, reason: 'bet-to-match' });
         return;
       }
-      const myCommit = commitOf(handState, mySeatIndex);
-      const target = handState.betToMatchCents || 0;
-      if (myCommit >= target) {
-        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'bet-to-match' });
-        return;
-      }
-      const delta = target - myCommit;
-      if (window.jamlog) window.jamlog.push('action.call.start');
-      try {
-        await updateDoc(handRef, {
-          [`commits.${mySeatIndex}`]: myCommit + delta,
-          toActSeat: nextToAct(handState, mySeatIndex),
-          updatedAt: serverTimestamp(),
-        });
-        if (window.jamlog) window.jamlog.push('action.call.ok', { delta });
-      } catch (e) { }
-    }
-
-    async function handleFold() {
-      if (handState?.toActSeat !== mySeatIndex) {
-        if (window.jamlog) window.jamlog.push('action.guard.fail', { reason: 'not-your-turn' });
-        return;
-      }
-      if (window.jamlog) window.jamlog.push('action.fold.start');
-      foldedSeats.add(mySeatIndex);
-      try {
-        await updateDoc(handRef, {
-          toActSeat: nextToAct(handState, mySeatIndex),
-          updatedAt: serverTimestamp(),
-        });
-        if (window.jamlog) window.jamlog.push('action.fold.ok');
-      } catch (e) { }
+      pending = type;
+      pendingTimer = setTimeout(() => { pending = null; renderPlayerBoard(); }, 500);
       renderPlayerBoard();
+      const payload = { type };
+      if (type === 'call') payload.amountCents = target - myCommit;
+      if (type === 'fold') foldedSeats.add(mySeatIndex);
+      try {
+        await enqueueAction(payload);
+        if (window.jamlog) window.jamlog.push('ui.action.enqueued', { type, seat: mySeatIndex });
+      } catch (e) {
+        pending = null;
+        if (pendingTimer) clearTimeout(pendingTimer);
+        renderPlayerBoard();
+      }
+    }
+
+    async function enqueueAction(action) {
+      await awaitAuthReady();
+      const uid = auth.currentUser?.uid || 'anon';
+      await addDoc(collection(db, `tables/${tableId}/actions`), {
+        handNo: handState?.handNo || 0,
+        seat: mySeatIndex,
+        ...action,
+        createdByUid: uid,
+        createdAt: serverTimestamp(),
+      });
     }
 
     function updateDebug() {
