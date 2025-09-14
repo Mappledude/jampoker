@@ -156,12 +156,14 @@ export const onActionCreated = onDocumentCreated(
         switch (action.type) {
           case "check": {
             if (betToMatch !== playerCommit) return;
+            const commitPath = `commits.${actorSeat}`;
             if (everyoneMatched(commits, betToMatch, seats, foldedSet)) {
               const adv = advanceStreet(hand, seats);
-              tx.update(handRef, adv);
+              tx.update(handRef, { ...adv, [commitPath]: playerCommit });
             } else {
               const next = nextEligible(actorSeat, seats, hand);
               tx.update(handRef, {
+                [commitPath]: playerCommit,
                 toActSeat: next,
                 updatedAt: FieldValue.serverTimestamp(),
               });
