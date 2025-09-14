@@ -329,7 +329,9 @@
       const bbName = getNameBySeat(h.positions?.bbSeatNum);
       const actorName = getNameBySeat(h.actorSeatNum);
       const board = (h.board || []).map(c => `<span class="card-chip">${formatCard(c)}</span>`).join(' ');
-      const potCents = Object.values(h.commits || {}).reduce((a, b) => a + (b || 0), 0);
+      const commits = h.commits || {};
+      const derivedPot = Object.values(commits).reduce((a, b) => a + (b || 0), 0);
+      const potCents = typeof h.potCents === 'number' ? h.potCents : derivedPot;
       let contrib = '';
       if (h.contributions) {
         const parts = [];
