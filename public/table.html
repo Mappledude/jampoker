@@ -31,7 +31,9 @@
       doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
       writeBatch, runTransaction, increment, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { awaitAuthReady } from "/auth.js";
+    import { awaitAuthReady, auth } from "/auth.js";
+
+    const shortUid = (uid) => uid ? uid.slice(0, 6) : 'null';
 
     if (window.jamlog && isDebug()) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'TABLE' });
@@ -227,7 +229,7 @@
       }
     }
 
-    function renderTableInfo() {
+    async function renderTableInfo() {
       if (!tableData) { infoEl.textContent = ''; return; }
       const t = tableData;
       const sb = t?.blinds?.sbCents ?? t.smallBlindCents ?? 0;
@@ -240,10 +242,8 @@
       const derivedSeatCount = seatData.filter(s => s.occupiedBy).length;
       const activeSeatCount = t.activeSeatCount ?? 0;
       const desyncLine = seatCountDesync ? `<div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>` : '';
-      const current = getCurrentPlayer();
-      const showStart = (current && seatData.some(s => s.occupiedBy === current.id)) || isDebug();
       const probeBtnHtml = isDebug() ? `<button id="btn-rules-probe" class="small" style="margin-left:8px;">Rules Probe</button>` : '';
-      const startBtnHtml = showStart ? `<div style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button>${probeBtnHtml}</div>` : '';
+      const startBtnHtml = `<div id="start-hand-wrap" style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button>${probeBtnHtml}<div id="start-hand-hint" class="small" style="margin-top:4px;display:none;"></div></div>`;
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
@@ -252,9 +252,30 @@
         ${desyncLine}
         ${startBtnHtml}
       `;
-      if (showStart) {
-        document.getElementById('btn-start-hand')?.addEventListener('click', startHand);
-        document.getElementById('btn-rules-probe')?.addEventListener('click', () => rulesProbe(tableId));
+      document.getElementById('btn-rules-probe')?.addEventListener('click', () => rulesProbe(tableId));
+      const startBtn = document.getElementById('btn-start-hand');
+      const hintEl = document.getElementById('start-hand-hint');
+      startBtn.disabled = true;
+      let enable = false;
+      await awaitAuthReady();
+      const uid = auth.currentUser?.uid || null;
+      if (!t.createdByUid || (uid && t.createdByUid === uid)) {
+        if (derivedSeatCount >= 2) {
+          enable = true;
+        } else {
+          startBtn.title = 'Need 2+ players';
+        }
+      } else {
+        const msg = `Only the table owner can start a hand. Owner: ${shortUid(t.createdByUid)}`;
+        startBtn.title = msg;
+        hintEl.textContent = msg;
+        hintEl.style.display = '';
+        if (window.jamlog) window.jamlog.push('hand.start.disabled', { reason: 'not-admin' });
+      }
+      startBtn.disabled = !enable;
+      if (enable) {
+        startBtn.removeAttribute('title');
+        startBtn.addEventListener('click', startHand);
       }
     }
 

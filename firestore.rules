@@ -6,6 +6,15 @@ service cloud.firestore {
       return request.auth != null && request.auth.token.admin == true;
     }
 
+    function tableDoc(tableId) {
+      return get(/databases/$(database)/documents/tables/$(tableId));
+    }
+    function isTableAdmin(tableId) {
+      return request.auth != null &&
+             tableDoc(tableId).data.createdByUid != null &&
+             tableDoc(tableId).data.createdByUid == request.auth.uid;
+    }
+
     // Helpers for key shape validation
     function onlyAllowedKeys(allowed) {
       return request.resource.data.keys().hasOnly(allowed);
@@ -27,7 +36,7 @@ service cloud.firestore {
       // Dev-safe create: any authenticated user (anon OK) may create a table but only with whitelisted keys
       allow create: if request.auth != null
         && hasAllKeys(['active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn'])
-        && onlyAllowedKeys(['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn','deletedAt'])
+        && onlyAllowedKeys(['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn','deletedAt','createdByUid'])
         && request.resource.data.active is bool
         && request.resource.data.maxSeats is int
         && request.resource.data.activeSeatCount is int
@@ -37,7 +46,11 @@ service cloud.firestore {
       // Update: players may ONLY change activeSeatCount; admins may archive (active/deletedAt)
       allow update: if (request.auth != null
                         && request.resource.data.diff(resource.data).changedKeys().hasOnly(['activeSeatCount']))
-                    || (isAdmin() && request.resource.data.diff(resource.data).changedKeys().hasOnly(['active','deletedAt']));
+                    || (isAdmin() && request.resource.data.diff(resource.data).changedKeys().hasOnly(['active','deletedAt']))
+                    || (request.auth != null
+                        && resource.data.createdByUid == null
+                        && request.resource.data.diff(resource.data).changedKeys().hasOnly(['createdByUid'])
+                        && request.resource.data.createdByUid == request.auth.uid);
 
       // Delete: keep admin-only
       allow delete: if isAdmin();
@@ -60,8 +73,7 @@ service cloud.firestore {
         // Anyone can read current hand markers
         allow read: if true;
 
-        // Authenticated clients can create/update with a strict key whitelist
-        allow create, update: if request.auth != null
+        allow create: if request.auth != null
           && request.resource.data.keys().subsetOf([
             'handNo',
             'dealerSeat',
@@ -73,7 +85,22 @@ service cloud.firestore {
             'commits',
             'lastAggressorSeat',
             'updatedAt'
-          ]);
+          ])
+          && (isTableAdmin(tableId) || tableDoc(tableId).data.createdByUid == null);
+        allow update: if request.auth != null
+          && request.resource.data.keys().subsetOf([
+            'handNo',
+            'dealerSeat',
+            'sbSeat',
+            'bbSeat',
+            'toActSeat',
+            'street',
+            'betToMatchCents',
+            'commits',
+            'lastAggressorSeat',
+            'updatedAt'
+          ])
+          && isTableAdmin(tableId);
 
         // No client deletes
         allow delete: if false;

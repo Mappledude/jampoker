@@ -350,6 +350,8 @@
       if (window.jamlog) window.jamlog.push('admin.create.start', { numericOk, keys: ['name','active','createdAt','maxSeats','activeSeatCount','gameType','blinds','buyIn'] });
 
       tStatus.textContent = "Creating…"; tBtn.disabled = true;
+      const u = auth.currentUser;
+      const createdByUid = u?.uid || null;
       const payload = {
         name,
         active: true,
@@ -359,6 +361,7 @@
         gameType: 'holdem',
         blinds: { sbCents: sbC, bbCents: bbC },
         buyIn: { minCents: minC, maxCents: maxC, defaultCents: defC },
+        createdByUid,
       };
       const types = {};
       Object.keys(payload).forEach(k => {
@@ -482,16 +485,22 @@
           const blindStr = `${dollars(sb)}/${dollars(bb)}`;
           const rangeStr = `${dollars(minB)}–${dollars(maxB)} (${dollars(defB)})`;
           const seated = seatCounts[id] || 0;
+          const ownerUid = d.createdByUid || null;
+          const ownerBadge = `<div class="small">Owner: ${ownerUid ? (auth.currentUser && ownerUid === auth.currentUser.uid ? 'you' : 'other') : '—'}</div>`;
+          const actions = [
+            `<a href="/table.html?id=${id}" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-size:12px;text-decoration:none;">Open</a>`,
+            `<button class="start-hand" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#3b82f6;color:white;font-size:12px;cursor:pointer;">Start Hand</button>`,
+            `<button class="archive-table" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-size:12px;cursor:pointer;">Archive</button>`
+          ];
+          if (!ownerUid && auth.currentUser) {
+            actions.push(`<button class="set-admin" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#10b981;color:white;font-size:12px;cursor:pointer;">Set me as admin</button>`);
+          }
           return `<tr data-id="${id}">
-          <td style="padding:8px;border-bottom:1px solid #334155;"><div style="font-weight:600">${d.name || "(no name)"}</div><div class="small"><code>${id}</code></div></td>
+          <td style="padding:8px;border-bottom:1px solid #334155;"><div style="font-weight:600">${d.name || "(no name)"}</div><div class="small"><code>${id}</code></div>${ownerBadge}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${blindStr}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${rangeStr}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${seated}</td>
-          <td style="padding:8px;border-bottom:1px solid #334155;text-align:right;">
-            <a href="/table.html?id=${id}" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-size:12px;text-decoration:none;">Open</a>
-            <button class="start-hand" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#3b82f6;color:white;font-size:12px;cursor:pointer;">Start Hand</button>
-            <button class="archive-table" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-size:12px;cursor:pointer;">Archive</button>
-          </td>
+          <td style="padding:8px;border-bottom:1px solid #334155;text-align:right;">${actions.join(' ')}</td>
         </tr>`;
         });
       if (rows.length === 0) {
@@ -623,6 +632,13 @@
         }
       } else if (target.classList.contains("start-hand")) {
         await startHand(id);
+      } else if (target.classList.contains("set-admin")) {
+        try {
+          await updateDoc(doc(db, 'tables', id), { createdByUid: auth.currentUser.uid });
+          alert('Set as admin.');
+        } catch (err) {
+          alert('Error: ' + (err?.message || err));
+        }
       }
     });
 
