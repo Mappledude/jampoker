@@ -32,6 +32,7 @@
       writeBatch, runTransaction, increment, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady, auth } from "/auth.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
       import { handDocPath } from "/js/dbPaths.js";
       import { logEvent } from "/js/debug.js";
 
@@ -54,6 +55,7 @@
 
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
+    const fns = getFunctions(app);
     document.body.classList.add('variant-v1');
     if (window.jamlog) window.jamlog.setTableId(tableId || null);
     const errorEl = document.getElementById('error');
@@ -496,68 +498,32 @@
 
     async function startHand() {
       if (window.jamlog) window.jamlog.push('hand.start.click');
-      const occupied = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex).sort((a,b) => a - b);
       try {
         await awaitAuthReady();
         const path = handDocPath(tableId);
-        const handRef = doc(db, path);
-        let currentState = handState;
-        if (!currentState) {
-          const snap = await getDoc(handRef);
-          currentState = snap.exists() ? snap.data() : null;
-        }
-        if (occupied.length < 2) {
-          const handNo = typeof currentState?.handNo === 'number' ? currentState.handNo : 0;
-          await setDoc(handRef, { handNo, dealerSeat: null, sbSeat: null, bbSeat: null, toActSeat: null, updatedAt: serverTimestamp() }, { merge: true });
-          if (window.jamlog) window.jamlog.push('hand.start.fail', { code: 'not-enough-players', message: 'Need 2+ players' });
-          alert('Need 2+ players');
-          return;
-        }
-        const next = (arr, val) => arr[(arr.indexOf(val) + 1) % arr.length];
-        let dealer;
-        if (currentState && occupied.includes(currentState.dealerSeat)) {
-          dealer = next(occupied, currentState.dealerSeat);
-        } else {
-          dealer = occupied[0];
-        }
-        const sbSeat = next(occupied, dealer);
-        const bbSeat = next(occupied, sbSeat);
-        const toActSeat = next(occupied, bbSeat);
-        const handNo = (typeof currentState?.handNo === 'number' ? currentState.handNo : 0) + 1;
-        const sb = tableData?.blinds?.sbCents || 0;
-        const bb = tableData?.blinds?.bbCents || 0;
-        const commits = {};
-        commits[String(sbSeat)] = sb;
-        commits[String(bbSeat)] = bb;
-        foldedSeats.clear();
-        const payload = {
-          handNo,
-          dealerSeat: dealer,
-          sbSeat,
-          bbSeat,
-          toActSeat,
-          street: 'preflop',
-          betToMatchCents: bb,
-          commits,
-          lastAggressorSeat: bbSeat,
-          updatedAt: serverTimestamp(),
-        };
         const uid = auth.currentUser?.uid || 'anon';
-        const createdByUid = tableData?.createdByUid || null;
+        let createdByUid = null;
+        try {
+          const tSnap = await getDoc(doc(db, `tables/${tableId}`));
+          createdByUid = tSnap.exists() ? (tSnap.data().createdByUid || null) : null;
+        } catch {}
         const isAdmin = !!(createdByUid && createdByUid === uid);
-        logEvent('hand.start.ruleProbe', { tableId, path, uid, createdByUid, isAdmin, keys: Object.keys(payload) });
-        if (window.jamlog) window.jamlog.push('hand.start.payload.keys', { keys: Object.keys(payload) });
-        await setDoc(handRef, payload, { merge: true });
+        logEvent('hand.start.ruleProbe', { tableId, path, uid, createdByUid, isAdmin, keys: [] });
+        const callable = httpsCallable(fns, 'startHand');
+        await callable({ tableId });
         logEvent('hand.start.ok', { path });
-        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street:'preflop' });
+        if (window.jamlog) window.jamlog.push('hand.start.ok');
       } catch (err) {
+        const code = err?.code;
+        const msg = err?.message;
         const path = handDocPath(tableId);
         const uid = auth.currentUser?.uid || 'anon';
         const createdByUid = tableData?.createdByUid || null;
         const isAdmin = !!(createdByUid && createdByUid === uid);
-        logEvent('hand.start.fail', { code: err?.code, message: err?.message, path, uid, createdByUid, isAdmin });
-        if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
-        alert('Error starting hand.');
+        logEvent('hand.start.fail', { code, message: msg, path, uid, createdByUid, isAdmin });
+        if (window.jamlog) window.jamlog.push('hand.start.fail', { code, message: msg });
+        if (code === 'failed-precondition') alert('Need 2+ players');
+        else alert('Error starting hand.');
       }
     }
 
