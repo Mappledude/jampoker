@@ -26,9 +26,9 @@
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
-    import { db, dollars, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
+    import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
-      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp, writeBatch
+      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp, writeBatch, runTransaction, increment
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
 
@@ -272,14 +272,86 @@
         seatEl.style.setProperty('--i', String(i));
         seatEl.style.setProperty('--n', String(maxSeats));
         if (seat && seat.occupiedBy) {
-          seatEl.innerHTML = `<div class="name">${seat.displayName || '(no name)'}</div><div class="stack small">${dollars(seat.chipStackCents || 0)}</div>`;
+          const stackLabel = seat.stackCents != null ? formatCents(seat.stackCents) : '—';
+          seatEl.innerHTML = `<div class="name">${seat.displayName || '(no name)'}</div><div class="stack small">${stackLabel}</div>`;
         } else {
           seatEl.innerHTML = '<div class="small">Sit here</div>';
+          seatEl.addEventListener('click', () => claimSeat(i));
         }
         ring.appendChild(seatEl);
       }
       seatsEl.innerHTML = '';
       seatsEl.appendChild(ring);
+    }
+
+    async function claimSeat(seatIndex) {
+      const current = getCurrentPlayer();
+      if (!current) { alert('Select a Current Player first.'); return; }
+      let stack = 0;
+      try {
+        await awaitAuthReady();
+        await runTransaction(db, async (tx) => {
+          const tableRef = doc(db, 'tables', tableId);
+          const seatRef = doc(db, 'tables', tableId, 'seats', String(seatIndex));
+          const [tableSnap, seatSnap] = await Promise.all([
+            tx.get(tableRef),
+            tx.get(seatRef),
+          ]);
+          if (!tableSnap.exists()) throw new Error('Table not found');
+          if (seatSnap.exists() && seatSnap.data()?.occupiedBy) throw new Error('Seat taken');
+          const t = tableSnap.data();
+          const buy = t?.buyIn || {};
+          let min = typeof buy.minCents === 'number' ? buy.minCents : 0;
+          let max = typeof buy.maxCents === 'number' ? buy.maxCents : min;
+          let def = typeof buy.defaultCents === 'number' ? buy.defaultCents : min;
+          if (min > max) {
+            if (window.jamlog) window.jamlog.push('table.buyin.invalid', { minCents: min, maxCents: max });
+            const fb = Math.min(min, max);
+            min = max = def = fb;
+          }
+          stack = Math.min(Math.max(def, min), max);
+          const seatData = {
+            seatIndex,
+            occupiedBy: current.id,
+            displayName: current.name || '',
+            sittingOut: false,
+            stackCents: stack,
+            updatedAt: serverTimestamp(),
+          };
+          if (seatSnap.exists()) tx.update(seatRef, seatData);
+          else tx.set(seatRef, seatData);
+          tx.update(tableRef, { activeSeatCount: increment(1) });
+        });
+        if (window.jamlog) window.jamlog.push('seat.tx.claim.stack', { seatIndex, stackCents: stack });
+      } catch (err) {
+        if (window.jamlog) window.jamlog.push('seat.tx.claim.fail', { code: err?.code });
+        alert('Seat taken or no permission.');
+      }
+    }
+
+    async function leaveSeat(seatIndex) {
+      const current = getCurrentPlayer();
+      if (!current) return;
+      try {
+        await awaitAuthReady();
+        await runTransaction(db, async (tx) => {
+          const tableRef = doc(db, 'tables', tableId);
+          const seatRef = doc(db, 'tables', tableId, 'seats', String(seatIndex));
+          const seatSnap = await tx.get(seatRef);
+          if (seatSnap.data()?.occupiedBy !== current.id) throw new Error('Not your seat');
+          tx.update(seatRef, {
+            occupiedBy: null,
+            displayName: null,
+            sittingOut: false,
+            stackCents: null,
+            updatedAt: serverTimestamp(),
+          });
+          tx.update(tableRef, { activeSeatCount: increment(-1) });
+        });
+        if (window.jamlog) window.jamlog.push('seat.tx.leave.stackCleared', { seatIndex });
+      } catch (err) {
+        if (window.jamlog) window.jamlog.push('seat.tx.leave.fail', { code: err?.code });
+      }
     }
 
     let intentPending = false;
@@ -293,7 +365,7 @@
         return;
       }
       const folded = handData?.folded || {};
-      const isActor = handData && seat.seatIndex === handData.actorSeatNum && !folded[current.id] && (seat.chipStackCents > 0);
+      const isActor = handData && seat.seatIndex === handData.actorSeatNum && !folded[current.id] && (seat.stackCents > 0);
       const toCall = handData?.toCallCents || 0;
       const minRaise = handData?.minRaiseCents || 0;
       const callLabel = toCall > 0 ? `Call ${dollars(toCall)}` : 'Check';
@@ -305,13 +377,20 @@
           <button id="btn-raise">${raiseLabel}</button>
         </div>
       ` : '<div class="small" style="text-align:center;margin-top:8px;">Waiting…</div>';
+      const stackLine = `<div class="small" style="text-align:center;">Stack: ${formatCents(seat.stackCents || 0)}</div>`;
       boardEl.innerHTML = `
+        ${stackLine}
         <div style="display:flex; justify-content:center; gap:8px;">
           <span class="card-chip">[ ?? ]</span>
           <span class="card-chip">[ ?? ]</span>
         </div>
         ${actionsHtml}
+        <div style="display:flex; justify-content:center; margin-top:8px;">
+          <button id="btn-leave-seat">Leave seat</button>
+        </div>
       `;
+      const leaveBtn = document.getElementById('btn-leave-seat');
+      leaveBtn.addEventListener('click', () => leaveSeat(seat.seatIndex));
       if (isActor) {
         const foldBtn = document.getElementById('btn-fold');
         const callBtn = document.getElementById('btn-call');
