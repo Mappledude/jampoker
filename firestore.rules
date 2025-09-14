@@ -71,8 +71,48 @@ service cloud.firestore {
       // Canonical hand state path:
       match /handState/{docId} {
         allow read: if true;
-        allow create, update: if isTableAdmin(tableId);
-        allow delete: if isTableAdmin(tableId);
+
+        function streetToNum(s) {
+          return s == 'preflop' ? 0
+               : s == 'flop' ? 1
+               : s == 'turn' ? 2
+               : 3;
+        }
+
+        function actorIs(tableId, seat) {
+          return request.auth != null &&
+                 get(/databases/$(database)/documents/tables/$(tableId)/seats/$(seat))
+                   .data.occupiedBy == request.auth.uid;
+        }
+
+        function isCheck(tableId) {
+          let seat = resource.data.toActSeat;
+          let bet = resource.data.betToMatchCents;
+          let oldCommit = resource.data.commits[seat] ?? 0;
+          let newCommit = request.resource.data.commits[seat] ?? oldCommit;
+          let delta = newCommit - oldCommit;
+          return actorIs(tableId, seat) && bet == oldCommit && delta == 0 &&
+                 request.resource.data.diff(resource.data).changedKeys()
+                   .hasOnly(['toActSeat','updatedAt','street','lastAggressorSeat','betToMatchCents']) &&
+                 streetToNum(request.resource.data.street) >= streetToNum(resource.data.street) &&
+                 request.resource.data.toActSeat != resource.data.toActSeat;
+        }
+
+        function isCall(tableId) {
+          let seat = resource.data.toActSeat;
+          let bet = resource.data.betToMatchCents;
+          let oldCommit = resource.data.commits[seat] ?? 0;
+          let newCommit = request.resource.data.commits[seat] ?? 0;
+          let delta = newCommit - oldCommit;
+          return actorIs(tableId, seat) && delta == bet - oldCommit && delta >= 0 &&
+                 request.resource.data.diff(resource.data).changedKeys()
+                   .hasOnly(['toActSeat','updatedAt','commits','street','lastAggressorSeat','betToMatchCents']) &&
+                 streetToNum(request.resource.data.street) >= streetToNum(resource.data.street) &&
+                 request.resource.data.toActSeat != resource.data.toActSeat;
+        }
+
+        allow update: if isCheck(tableId) || isCall(tableId);
+        allow create, delete: if isTableAdmin(tableId);
       }
     }
 
