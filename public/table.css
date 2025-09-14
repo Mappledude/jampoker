@@ -37,3 +37,19 @@ body.variant-v1 .community-card.enter {
   flex-direction: column;
   justify-content: center;
   align-items: center;
+}
+
+.seat .pos-badge {
+  position: absolute;
+  top: -4px;
+  right: -4px;
+  background: #0ea5e9;
+  color: #fff;
+  font-size: 10px;
+  padding: 2px 4px;
+  border-radius: 4px;
+}
+
+.seat .pos-badge.dealer { background: #6b7280; }
+.seat .pos-badge.sb { background: #3b82f6; }
+.seat .pos-badge.bb { background: #1d4ed8; }

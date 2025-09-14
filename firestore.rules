@@ -56,6 +56,13 @@ service cloud.firestore {
       }
     }
 
+    match /tables/{tableId}/hand/{docId} {
+      allow read: if true;
+      allow create, update: if request.auth != null
+        && onlyAllowedKeys(['handNo','dealerSeat','sbSeat','bbSeat','toActSeat','updatedAt']);
+      allow delete: if false;
+    }
+
     // Hands are server-managed only.
     match /tables/{tableId}/hands/{handId} {
       allow read: if true;

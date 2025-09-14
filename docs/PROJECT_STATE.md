@@ -21,6 +21,7 @@
 - **brief-11e** complete — seat subscription + safe backfill + derived/active guard
 - **brief-11f.hotfix** complete — seat txn allowed-keys only + stable seats subscription (+ backfill)
 - **brief-12a** complete — auto-stack on seat claim + stack display
+- **brief-12b** complete — Start Hand button with Dealer/SB/BB badges
 
 ## Open Issues / Next Steps
 - Verify **Board UI** renders in /table.html after closing preflop.

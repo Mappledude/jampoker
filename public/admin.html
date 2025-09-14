@@ -186,7 +186,7 @@
     import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug } from "/common.js";
       import {
         collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
-        doc, updateDoc, deleteDoc, setDoc, writeBatch, getDocs
+        doc, updateDoc, deleteDoc, setDoc, writeBatch, getDocs, getDoc
       } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { awaitAuthReady, isAuthed } from "/auth.js";
@@ -489,6 +489,7 @@
           <td style="padding:8px;border-bottom:1px solid #334155;">${seated}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;text-align:right;">
             <a href="/table.html?id=${id}" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-size:12px;text-decoration:none;">Open</a>
+            <button class="start-hand" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#3b82f6;color:white;font-size:12px;cursor:pointer;">Start Hand</button>
             <button class="archive-table" style="padding:4px 8px;border-radius:8px;border:1px solid #7f1d1d;background:#ef4444;color:white;font-size:12px;cursor:pointer;">Archive</button>
           </td>
         </tr>`;
@@ -545,22 +546,64 @@
       });
     }
 
+    async function startHand(tableId) {
+      if (window.jamlog) window.jamlog.push('hand.start.click');
+      const seatsCol = collection(doc(db, 'tables', tableId), 'seats');
+      try {
+        await awaitAuthReady();
+        const snap = await getDocs(query(seatsCol, orderBy('seatIndex', 'asc')));
+        const occupied = [];
+        snap.forEach((d) => {
+          const s = d.data();
+          if (s.occupiedBy) occupied.push(s.seatIndex);
+        });
+        const stateRef = doc(db, 'tables', tableId, 'hand', 'state');
+        const stateSnap = await getDoc(stateRef);
+        const currentState = stateSnap.exists() ? stateSnap.data() : null;
+        if (occupied.length < 2) {
+          const handNo = typeof currentState?.handNo === 'number' ? currentState.handNo : 0;
+          await setDoc(stateRef, { handNo, dealerSeat: null, sbSeat: null, bbSeat: null, toActSeat: null, updatedAt: serverTimestamp() }, { merge: true });
+          if (window.jamlog) window.jamlog.push('hand.start.fail', { code: 'not-enough-players', message: 'Need 2+ players' });
+          alert('Need 2+ players');
+          return;
+        }
+        const next = (arr, val) => arr[(arr.indexOf(val) + 1) % arr.length];
+        let dealer;
+        if (currentState && occupied.includes(currentState.dealerSeat)) dealer = next(occupied, currentState.dealerSeat);
+        else dealer = occupied[0];
+        const sb = next(occupied, dealer);
+        const bb = next(occupied, sb);
+        const toAct = next(occupied, bb);
+        const handNo = (typeof currentState?.handNo === 'number' ? currentState.handNo : 0) + 1;
+        await setDoc(stateRef, { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct, updatedAt: serverTimestamp() }, { merge: true });
+        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct });
+      } catch (err) {
+        if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
+        alert('Error starting hand.');
+      }
+    }
+
     startTablesListener();
 
     tablesBody?.addEventListener("click", async (e) => {
-      if (!e.target.classList.contains("archive-table")) return;
-      const row = e.target.closest("tr");
+      const target = e.target;
+      const row = target.closest("tr");
+      if (!row) return;
       const id = row.getAttribute("data-id");
-      const conf = confirm("Archive this table?");
-      if (!conf) return;
-      try {
-        await updateDoc(doc(db, "tables", id), {
-          active: false,
-          deletedAt: serverTimestamp(),
-        });
-        alert("Table archived.");
-      } catch (err) {
-        alert("Error: " + (err?.message || err));
+      if (target.classList.contains("archive-table")) {
+        const conf = confirm("Archive this table?");
+        if (!conf) return;
+        try {
+          await updateDoc(doc(db, "tables", id), {
+            active: false,
+            deletedAt: serverTimestamp(),
+          });
+          alert("Table archived.");
+        } catch (err) {
+          alert("Error: " + (err?.message || err));
+        }
+      } else if (target.classList.contains("start-hand")) {
+        await startHand(id);
       }
     });
 
