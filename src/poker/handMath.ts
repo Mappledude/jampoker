@@ -9,6 +9,9 @@ export interface HandState {
   activeSeats?: number[]; // optional list of active seat indexes
   folded?: Record<number, boolean>;
   lastAggressorSeat?: number | null;
+  minRaiseToCents?: number;
+  lastAggressorPrevBet?: number;
+  updatedAt?: { toMillis(): number } | Date | null;
 }
 
 export function computeToCall(hand: HandState, seat: number): number {
