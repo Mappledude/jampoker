@@ -4,6 +4,7 @@ import { telemetry } from '../telemetry';
 import { computeTurn } from '../lib/turn';
 import { findMySeat, toSeatNumber } from '../lib/seats';
 import { toast } from 'react-toastify';
+import { useLatest } from './hooks/useLatest';
 
 interface Seat {
   seat?: unknown;
@@ -34,7 +35,13 @@ export const TableActions: React.FC<TableActionsProps> = ({
   const mySeat = findMySeat(seats as any[], uid);
   const seatObj = seats.find((s) => toSeatNumber((s as any)?.seat ?? (s as any)?.id) === mySeat);
   const myStack = mySeat == null ? 0 : seatObj?.stackCents ?? 0;
-  const turn = computeTurn(handState && (handState as any)?.loaded ? (handState as any) : null, mySeat, myStack);
+  const turn = computeTurn(
+    handState && (handState as any)?.loaded ? (handState as any) : null,
+    mySeat,
+    myStack
+  );
+  const handRef = useLatest(handState);
+  const seatsRef = useLatest(seats);
   const canActRef = useRef(turn.canAct);
   const lastActionAtRef = useRef(0);
 
@@ -80,58 +87,108 @@ export const TableActions: React.FC<TableActionsProps> = ({
     ? 'Check'
     : `Call $${(turn.owe / 100).toFixed(2)}`;
 
-  const logGuard = () => {
-    telemetry('action.guard', {
-      reason: 'not-your-turn',
-      myUid: uid,
-      mySeat,
-      toActSeat: turn.toActSeat,
-      toMatch: turn.toMatch,
-      myCommit: turn.myCommit,
-      owe: turn.owe,
-      street: handState?.street,
-    });
-    toast.info(`It's seat ${turn.toActSeat}'s turn`);
-  };
-
   const handlePrimary = async () => {
-    if (!turn.canAct || (!turn.canCheck && !turn.canCall)) {
-      logGuard();
+    const handNow = handRef.current;
+    const seatsNow = seatsRef.current;
+    const mySeatNow = findMySeat(seatsNow as any[], uid);
+    const seatObjNow = (seatsNow ?? []).find(
+      (s: any) => toSeatNumber((s as any)?.seat ?? (s as any)?.id) === mySeatNow
+    );
+    const stackNow = mySeatNow == null ? 0 : seatObjNow?.stackCents ?? 0;
+    const turnNow = computeTurn(
+      handNow && (handNow as any)?.loaded ? (handNow as any) : null,
+      mySeatNow,
+      stackNow
+    );
+    telemetry('turn.snapshot', {
+      myUid: uid,
+      mySeat: mySeatNow,
+      toActSeat: turnNow.toActSeat,
+      toMatch: turnNow.toMatch,
+      myCommit: turnNow.myCommit,
+      owe: turnNow.owe,
+      street: (handNow as any)?.street,
+      handNo: (handNow as any)?.handNo,
+    });
+    if (!turnNow.canAct || (!turnNow.canCheck && !turnNow.canCall)) {
+      telemetry('action.guard', {
+        reason: 'not-your-turn',
+        myUid: uid,
+        mySeat: mySeatNow,
+        toActSeat: turnNow.toActSeat,
+        toMatch: turnNow.toMatch,
+        myCommit: turnNow.myCommit,
+        owe: turnNow.owe,
+        street: (handNow as any)?.street,
+      });
+      toast.info(`It's seat ${turnNow.toActSeat}'s turn`);
       return;
     }
     setPending(true);
     lastActionAtRef.current = Date.now();
     try {
-      if (turn.canCheck) {
-        telemetry('action.check.start', { seat: mySeat });
+      if (turnNow.canCheck) {
+        telemetry('action.check.start', { seat: mySeatNow });
         await onCheck();
-        telemetry('action.check.ok', { seat: mySeat });
-      } else if (turn.canCall) {
-        telemetry('action.call.start', { seat: mySeat, amount: turn.owe });
-        await onCall(turn.owe);
-        telemetry('action.call.ok', { seat: mySeat, amount: turn.owe });
+        telemetry('action.check.ok', { seat: mySeatNow });
+      } else if (turnNow.canCall) {
+        telemetry('action.call.start', { seat: mySeatNow, amount: turnNow.owe });
+        await onCall(turnNow.owe);
+        telemetry('action.call.ok', { seat: mySeatNow, amount: turnNow.owe });
       }
     } catch (e: any) {
       const reason = e?.message || 'error';
-      const event = turn.canCheck ? 'action.check.fail' : 'action.call.fail';
-      telemetry(event, { seat: mySeat, reason });
+      const event = turnNow.canCheck ? 'action.check.fail' : 'action.call.fail';
+      telemetry(event, { seat: mySeatNow, reason });
       setPending(false);
     }
   };
 
   const handleFold = async () => {
-    if (!turn.canFold) {
-      logGuard();
+    const handNow = handRef.current;
+    const seatsNow = seatsRef.current;
+    const mySeatNow = findMySeat(seatsNow as any[], uid);
+    const seatObjNow = (seatsNow ?? []).find(
+      (s: any) => toSeatNumber((s as any)?.seat ?? (s as any)?.id) === mySeatNow
+    );
+    const stackNow = mySeatNow == null ? 0 : seatObjNow?.stackCents ?? 0;
+    const turnNow = computeTurn(
+      handNow && (handNow as any)?.loaded ? (handNow as any) : null,
+      mySeatNow,
+      stackNow
+    );
+    telemetry('turn.snapshot', {
+      myUid: uid,
+      mySeat: mySeatNow,
+      toActSeat: turnNow.toActSeat,
+      toMatch: turnNow.toMatch,
+      myCommit: turnNow.myCommit,
+      owe: turnNow.owe,
+      street: (handNow as any)?.street,
+      handNo: (handNow as any)?.handNo,
+    });
+    if (!turnNow.canFold) {
+      telemetry('action.guard', {
+        reason: 'not-your-turn',
+        myUid: uid,
+        mySeat: mySeatNow,
+        toActSeat: turnNow.toActSeat,
+        toMatch: turnNow.toMatch,
+        myCommit: turnNow.myCommit,
+        owe: turnNow.owe,
+        street: (handNow as any)?.street,
+      });
+      toast.info(`It's seat ${turnNow.toActSeat}'s turn`);
       return;
     }
     setPending(true);
     lastActionAtRef.current = Date.now();
     try {
-      telemetry('action.fold.start', { seat: mySeat });
+      telemetry('action.fold.start', { seat: mySeatNow });
       await onFold();
-      telemetry('action.fold.ok', { seat: mySeat });
+      telemetry('action.fold.ok', { seat: mySeatNow });
     } catch (e: any) {
-      telemetry('action.fold.fail', { seat: mySeat, reason: e?.message || 'error' });
+      telemetry('action.fold.fail', { seat: mySeatNow, reason: e?.message || 'error' });
       setPending(false);
     }
   };
