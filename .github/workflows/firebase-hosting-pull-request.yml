@@ -13,8 +13,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: FirebaseExtended/action-hosting-deploy@v0
+      - name: Deploy to Firebase Hosting preview (non-blocking)
+        id: deploy_to_firebase_hosting_preview_non_blocking
+        uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
           projectId: jam-poker
+          channelId: preview
+          expires: 30d
+        continue-on-error: true
+      - name: Preview status
+        if: always()
+        run: |
+          if [ "${{ steps.deploy_to_firebase_hosting_preview_non_blocking.outcome }}" = "failure" ]; then
+            echo "::warning::Firebase Hosting preview not published. Likely channel quota (429)."
+            echo "PR build succeeded; rules deploy is separate. You can still test on:"
+            echo "  - production: https://jampoker.web.app"
+            echo "If you need a preview URL, run locally once:"
+            echo "  firebase hosting:channel:list --site jampoker --project jam-poker"
+            echo "  firebase hosting:channel:delete <old-channel> --site jampoker --project jam-poker --force"
+            echo "  firebase hosting:channel:create preview --site jampoker --project jam-poker --ttl 2592000s"
+          else
+            echo "Preview published (channel: preview). See action output for the URL."
+          fi
