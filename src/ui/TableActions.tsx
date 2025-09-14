@@ -1,26 +1,36 @@
 import React, { useState } from 'react';
-import { computeToCall, computeLegalActions, HandState } from '../poker/handMath';
+import { HandState } from '../poker/handMath';
 import { telemetry } from '../telemetry';
+import { computeActionState, Seat } from '../table/computeActionState';
 
 export interface TableActionsProps {
-  hand?: HandState | null;
-  mySeat: number | null;
+  uid: string;
+  seats: Seat[];
+  handState: HandState | null;
   onCheck: () => Promise<void>;
   onCall: (toCall: number) => Promise<void>;
 }
 
-export const TableActions: React.FC<TableActionsProps> = ({ hand, mySeat, onCheck, onCall }) => {
+export const TableActions: React.FC<TableActionsProps> = ({ uid, seats, handState, onCheck, onCall }) => {
   const [locked, setLocked] = useState(false);
-  if (hand == null || mySeat == null) return null;
+  const action = computeActionState({ uid, seats, handState });
+  if (!handState) return null;
 
-  const toCall = computeToCall(hand, mySeat);
-  const legal = computeLegalActions(hand, mySeat);
-  const isActor = hand.toActSeat === mySeat;
-  const disabled = locked || !isActor;
-  const label = toCall === 0 ? 'Check' : `Call $${(toCall / 100).toFixed(2)}`;
+  const disabled = locked || !action.enabled;
+  const callAmount = action.deltaToCall ?? 0;
+  const label = callAmount === 0 ? 'Check' : `Call $${(callAmount / 100).toFixed(2)}`;
 
-  const guardFail = (type: 'check' | 'call', reason: string) => {
-    telemetry(`action.${type}.fail`, { toCall, reason });
+  const logGuard = (state = action) => {
+    telemetry('action.guard', {
+      reason: state.reason,
+      seatIndex: state.seatIndex,
+      toAct: state.toAct,
+      street: handState?.street,
+      betToMatchCents: state.betToMatch,
+      myCommitCents: state.myCommit,
+      deltaToCall: state.deltaToCall,
+      stackCents: state.stack,
+    });
   };
 
   const lock = () => {
@@ -28,38 +38,60 @@ export const TableActions: React.FC<TableActionsProps> = ({ hand, mySeat, onChec
     setTimeout(() => setLocked(false), 600);
   };
 
-  const handleCheck = async () => {
-    if (!isActor) return guardFail('check', 'not-your-turn');
-    if (!legal.check) return guardFail('check', 'now-must-call');
-    telemetry('action.check.start', { toCall });
-    lock();
-    try {
-      await onCheck();
-      telemetry('action.check.ok', { toCall });
-    } catch (e: any) {
-      telemetry('action.check.fail', { toCall, reason: e?.message || 'error' });
-    }
-  };
+  const handlePrimary = async () => {
+    const state = computeActionState({ uid, seats, handState });
+    logGuard(state);
+    if (!state.enabled) return;
 
-  const handleCall = async () => {
-    if (!isActor) return guardFail('call', 'not-your-turn');
-    if (!legal.call) return guardFail('call', 'no-call');
-    telemetry('action.call.start', { toCall });
     lock();
     try {
-      await onCall(toCall);
-      telemetry('action.call.ok', { toCall });
+      if (state.deltaToCall === 0 && state.canCheck) {
+        telemetry('action.check.start', {
+          seatIndex: state.seatIndex,
+          betToMatchCents: state.betToMatch,
+          myCommitCents: state.myCommit,
+        });
+        await onCheck();
+        telemetry('action.check.ok', {
+          seatIndex: state.seatIndex,
+          betToMatchCents: state.betToMatch,
+          myCommitCents: state.myCommit,
+        });
+      } else if (state.canCall) {
+        telemetry('action.call.start', {
+          seatIndex: state.seatIndex,
+          deltaToCall: state.deltaToCall,
+          betToMatchCents: state.betToMatch,
+          myCommitCents: state.myCommit,
+        });
+        await onCall(state.deltaToCall || 0);
+        telemetry('action.call.ok', {
+          seatIndex: state.seatIndex,
+          deltaToCall: state.deltaToCall,
+          betToMatchCents: state.betToMatch,
+          myCommitCents: state.myCommit,
+        });
+      }
     } catch (e: any) {
-      telemetry('action.call.fail', { toCall, reason: e?.message || 'error' });
+      const reason = e?.message || 'error';
+      const event = state.deltaToCall === 0 ? 'action.check.fail' : 'action.call.fail';
+      telemetry(event, {
+        seatIndex: state.seatIndex,
+        deltaToCall: state.deltaToCall,
+        betToMatchCents: state.betToMatch,
+        myCommitCents: state.myCommit,
+        reason,
+      });
     }
   };
 
   return (
     <div>
-      <button disabled={disabled || !legal.check} onClick={handleCheck}>
-        Check
-      </button>
-      <button disabled={disabled || !legal.call} onClick={handleCall}>
+      <button
+        disabled={disabled}
+        onClick={handlePrimary}
+        title={!action.enabled ? 'Not your turn' : undefined}
+      >
         {label}
       </button>
     </div>
