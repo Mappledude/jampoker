@@ -99,6 +99,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
   const label = canCheck
     ? 'Check'
     : `Call $${(turn.owe / 100).toFixed(2)}`;
+  const potLabel = `$${(turn.potCents / 100).toFixed(2)}`;
 
   const handlePrimary = async () => {
     const handNow = handRef.current;
@@ -207,6 +208,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
 
   return (
     <div>
+      <div>Pot: {potLabel}</div>
       <button
         disabled={!canAct || (!canCheck && !canCall) || pending}
         onClick={handlePrimary}
