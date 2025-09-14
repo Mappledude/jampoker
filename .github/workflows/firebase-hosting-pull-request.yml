@@ -13,8 +13,42 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Ensure stable preview channel exists (create or repair)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          set -e
+          # Does 'preview' exist?
+          npx firebase-tools@latest hosting:channel:list \
+            --site jampoker --project jam-poker --json --token "$FIREBASE_TOKEN" > channels.json
+
+          node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('channels.json','utf8'));const ok=(j.result||[]).some(c=>c.name.endsWith('/channels/preview'));process.exit(ok?0:2)"
+
+          if [ $? -eq 2 ]; then
+            echo 'Channel "preview" not found; attempting create (30d TTL)...'
+            if ! npx firebase-tools@latest hosting:channel:create preview \
+                  --site jampoker --project jam-poker --ttl 2592000s --token "$FIREBASE_TOKEN"; then
+              echo 'Create failed; trying to free quota by deleting old pr-* channels...'
+              # List channels again (fresh)
+              npx firebase-tools@latest hosting:channel:list \
+                --site jampoker --project jam-poker --json --token "$FIREBASE_TOKEN" > channels.json
+
+              node -e "const fs=require('fs');const j=JSON.parse(fs.readFileSync('channels.json','utf8'));const ids=(j.result||[]).map(c=>c.name.split('/').pop()).filter(id=>/^pr-/.test(id));fs.writeFileSync('pr_channels.txt',ids.join('\n'));console.log('Will delete:',ids)"
+              if [ -s pr_channels.txt ]; then
+                while IFS= read -r id; do
+                  [ -z "$id" ] || npx firebase-tools@latest hosting:channel:delete "$id" \
+                    --site jampoker --project jam-poker --force --token "$FIREBASE_TOKEN" || true
+                done < pr_channels.txt
+              fi
+              echo 'Retry creating "preview"...'
+              npx firebase-tools@latest hosting:channel:create preview \
+                --site jampoker --project jam-poker --ttl 2592000s --token "$FIREBASE_TOKEN"
+            fi
+          fi
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
           projectId: jam-poker
+          channelId: preview       # reuse the same channel forever
+          expires: 30d             # ignored if channel already exists; creation step sets TTL
