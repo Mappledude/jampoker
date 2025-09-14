@@ -8,7 +8,7 @@ export async function call(
   handNo: number,
   amountCents?: number
 ): Promise<void> {
-  await enqueueAction(db, tableId, seat, uid, handNo, {
+  await enqueueAction(db, tableId, seat, uid, handNo, uid, {
     type: 'call',
     amountCents,
   });

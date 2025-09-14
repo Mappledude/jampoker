@@ -87,7 +87,7 @@
       getDoc(doc(db, `tables/${tableId}`))
         .then((s) => {
           const isAdmin = s.exists() && s.data()?.createdByUid === u.uid;
-          if (isAdmin) startActionWorker(tableId, u.uid);
+      if (isAdmin) startActionWorker(tableId);
         })
         .catch((e) => console.error("host.check.error", e));
     });
@@ -552,6 +552,13 @@
 
     function commitOf(state, seat){ return Number(state.commits?.[String(seat)] || 0); }
 
+    function disableActionButtons(disabled) {
+      ['btn-check','btn-call','btn-fold'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.disabled = disabled;
+      });
+    }
+
       function renderPlayerBoard() {
         const current = getCurrentPlayer();
         mySeatIndex = seatData.find(s => s.occupiedBy === current?.id)?.seatIndex ?? null;
@@ -615,6 +622,7 @@
       if (window.jamlog) window.jamlog.push('ui.action.click', { type, seat: mySeatIndex });
       if (handState?.toActSeat !== mySeatIndex) {
         if (window.jamlog) window.jamlog.push('ui.action.blocked', { type, seat: mySeatIndex, reason: 'not-your-turn' });
+        disableActionButtons(true);
         alert("It's not your turn");
         return;
       }
@@ -622,13 +630,16 @@
       const target = handState.betToMatchCents || 0;
       if (type === 'check' && myCommit !== target) {
         if (window.jamlog) window.jamlog.push('ui.action.blocked', { type, seat: mySeatIndex, reason: 'bet-to-match' });
+        disableActionButtons(true);
         return;
       }
       if (type === 'call' && myCommit >= target) {
         if (window.jamlog) window.jamlog.push('ui.action.blocked', { type, seat: mySeatIndex, reason: 'bet-to-match' });
+        disableActionButtons(true);
         return;
       }
       pending = type;
+      disableActionButtons(true);
       pendingTimer = setTimeout(() => { pending = null; renderPlayerBoard(); }, 500);
       renderPlayerBoard();
       const payload = { type };
@@ -646,12 +657,14 @@
 
     async function enqueueAction(action) {
       await awaitAuthReady();
-      const uid = auth.currentUser?.uid || 'anon';
+      const createdByUid = auth.currentUser?.uid || 'anon';
+      const actorUid = seatData[mySeatIndex]?.occupiedBy || null;
       await addDoc(collection(db, `tables/${tableId}/actions`), {
         handNo: handState?.handNo || 0,
         seat: mySeatIndex,
         ...action,
-        createdByUid: uid,
+        createdByUid,
+        actorUid,
         createdAt: serverTimestamp(),
         applied: false,
       });

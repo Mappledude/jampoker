@@ -9,8 +9,9 @@ export async function enqueueAction(
   db: any,
   tableId: string,
   seat: number,
-  uid: string,
+  createdByUid: string,
   handNo: number,
+  actorUid: string,
   action: PlayerAction
 ) {
   const ref = doc(collection(db, `tables/${tableId}/actions`));
@@ -18,7 +19,8 @@ export async function enqueueAction(
     handNo,
     seat,
     ...action,
-    createdByUid: uid,
+    createdByUid,
+    actorUid,
     createdAt: serverTimestamp(),
     applied: false,
     clientTs: Date.now(),

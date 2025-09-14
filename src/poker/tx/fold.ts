@@ -7,5 +7,5 @@ export async function fold(
   uid: string,
   handNo: number
 ): Promise<void> {
-  await enqueueAction(db, tableId, seat, uid, handNo, { type: 'fold' });
+  await enqueueAction(db, tableId, seat, uid, handNo, uid, { type: 'fold' });
 }
