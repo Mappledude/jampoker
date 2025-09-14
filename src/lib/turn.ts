@@ -1,63 +1,40 @@
-import { toSeatNumber } from './seats';
-
 interface Seat {
   uid?: string;
   stackCents?: number;
   [k: string]: any;
 }
 
-export function computeTurnFromDoc(
+// Computes the live turn state from a Firestore snapshot. This should be used
+// for guards and writes. For UI previews, use `computeWhatIfTurn` instead and
+// never feed the preview back into guards.
+export function computeLiveTurn(
   handDoc: any,
   seats: Seat[],
-  myUid: string
+  authUid: string
 ) {
-  const mySeat = seats.findIndex((s) => s?.uid === myUid);
-  const toActSeat = toSeatNumber(handDoc?.toActSeat);
-  if (!handDoc || mySeat < 0 || toActSeat == null) return { ready: false } as const;
-
-  const folded = new Set((handDoc.folded ?? []).map((x: any) => Number(x)));
-  const commits = handDoc.commits ?? {};
-  const myCommit = Number(commits[String(mySeat)] ?? 0);
-  const toMatch = Number(handDoc.betToMatchCents ?? 0);
-  const owe = Math.max(0, toMatch - myCommit);
-  const myStack = Number(seats[mySeat]?.stackCents ?? 0);
-
-  const canAct = toActSeat === mySeat && !folded.has(mySeat);
-  const canCheck = canAct && owe === 0;
-  const canCall = canAct && owe > 0 && myStack >= owe;
-  const canBet = canAct && toMatch === 0 && myStack > 0;
-  const canFold = canAct;
-
+  const mySeat = seats.findIndex((s) => s?.uid === authUid);
+  const commits = handDoc?.commits ?? {};
+  const myCommit = commits[String(mySeat)] ?? 0;
+  const toMatch = handDoc?.betToMatchCents ?? 0;
   return {
-    ready: true,
-    myUid,
+    myUid: authUid,
     mySeat,
-    toActSeat,
+    toActSeat: handDoc?.toActSeat ?? null,
+    street: handDoc?.street ?? null,
+    handNo: handDoc?.handNo ?? null,
     toMatch,
     myCommit,
-    owe,
-    canAct,
-    canCheck,
-    canCall,
-    canBet,
-    canFold,
-  } as const;
+    owe: Math.max(0, toMatch - myCommit),
+  };
 }
 
+// UI-only preview; do NOT use in guards.
 export function computeWhatIfTurn(
-  live: ReturnType<typeof computeTurnFromDoc>,
+  live: ReturnType<typeof computeLiveTurn>,
   kind: 'check' | 'call' | 'raise',
-  amountCents?: number
+  amountCents = 0
 ) {
-  const add =
-    kind === 'call'
-      ? live.owe
-      : kind === 'raise'
-      ? Number(amountCents || 0)
-      : 0;
-  const myCommit = live.myCommit + add;
-  const toMatch = kind === 'raise' ? live.toMatch + add : live.toMatch;
-  const owe = Math.max(0, toMatch - myCommit);
-  return { ...live, myCommit, toMatch, owe } as typeof live;
+  const add = kind === 'call' ? live.owe : kind === 'raise' ? amountCents : 0;
+  return { ...live, myCommit: live.myCommit + add };
 }
 

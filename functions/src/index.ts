@@ -4,6 +4,9 @@ import { getFirestore, FieldValue, DocumentReference, Transaction, CollectionRef
 import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentWritten, onDocumentUpdated, onDocumentCreated } from "firebase-functions/v2/firestore";
 
+export { takeActionTX } from "./takeActionTX";
+export { leaveSeatTX } from "./leaveSeatTX";
+
 initializeApp();
 const db = getFirestore();
 
