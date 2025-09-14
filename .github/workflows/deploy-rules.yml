@@ -1,0 +1,61 @@
+name: Deploy Firestore Rules
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - "firestore.rules"
+      - ".github/workflows/deploy-rules.yml"
+  workflow_dispatch: {}
+
+jobs:
+  deploy_rules:
+    runs-on: ubuntu-latest
+    env:
+      PROJECT_ID: jam-poker
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Decide auth method
+        id: authpick
+        run: |
+          if [ -n "${{ secrets.FIREBASE_TOKEN }}" ]; then
+            echo "method=token" >> "$GITHUB_OUTPUT"
+          elif [ -n "${{ secrets.GCP_SA_KEY }}" ]; then
+            echo "method=sa" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::Missing credentials. Add FIREBASE_TOKEN (firebase login:ci) or GCP_SA_KEY (service account JSON) to repo secrets."
+            exit 1
+          fi
+
+      - name: Auth with service account
+        if: steps.authpick.outputs.method == 'sa'
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
+
+      - name: Show Firebase CLI version
+        run: npx --yes firebase-tools@14.16.0 --version
+
+      - name: Deploy Firestore security rules
+        if: steps.authpick.outputs.method == 'token'
+        run: |
+          npx --yes firebase-tools@14.16.0 deploy \
+            --only firestore:rules \
+            --project "$PROJECT_ID" \
+            --non-interactive \
+            --token "${FIREBASE_TOKEN}"
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+      - name: Deploy Firestore security rules (SA auth)
+        if: steps.authpick.outputs.method == 'sa'
+        run: |
+          npx --yes firebase-tools@14.16.0 deploy \
+            --only firestore:rules \
+            --project "$PROJECT_ID" \
+            --non-interactive
