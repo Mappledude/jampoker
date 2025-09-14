@@ -1,13 +1,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HandState } from '../poker/handMath';
 import { telemetry } from '../telemetry';
-import {
-  computeTurnState,
-  findMySeat,
-  resolveSeatNumber,
-  Seat,
-} from '../table/actionUtils';
+import { computeTurn } from '../lib/turn';
+import { findMySeat, toSeatNumber } from '../lib/seats';
 import { toast } from 'react-toastify';
+
+interface Seat {
+  seat?: unknown;
+  id?: string;
+  uid: string;
+  stackCents: number;
+  [key: string]: any;
+}
 
 export interface TableActionsProps {
   uid: string;
@@ -27,10 +31,10 @@ export const TableActions: React.FC<TableActionsProps> = ({
   onFold,
 }) => {
   const [pending, setPending] = useState(false);
-  const mySeat = findMySeat(seats, uid);
-  const seatObj = seats.find((s) => resolveSeatNumber(s) === mySeat);
+  const mySeat = findMySeat(seats as any[], uid);
+  const seatObj = seats.find((s) => toSeatNumber((s as any)?.seat ?? (s as any)?.id) === mySeat);
   const myStack = mySeat == null ? 0 : seatObj?.stackCents ?? 0;
-  const turn = computeTurnState(handState && (handState as any)?.loaded ? handState : null, mySeat, myStack);
+  const turn = computeTurn(handState && (handState as any)?.loaded ? (handState as any) : null, mySeat, myStack);
   const canActRef = useRef(turn.canAct);
   const lastActionAtRef = useRef(0);
 
@@ -54,7 +58,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
   }, [handState?.updatedAt, pending]);
 
   if (!turn.ready) {
-    return <div>Syncing table state…</div>;
+    return null;
   }
 
   const label = turn.canCheck
@@ -67,8 +71,8 @@ export const TableActions: React.FC<TableActionsProps> = ({
       myUid: uid,
       mySeat,
       toActSeat: turn.toActSeat,
-      betToMatchCents: handState?.betToMatchCents ?? 0,
-      myCommit: Number(handState?.commits?.[String(mySeat)] ?? 0),
+      toMatch: turn.toMatch,
+      myCommit: turn.myCommit,
       owe: turn.owe,
       street: handState?.street,
     });
@@ -133,6 +137,23 @@ export const TableActions: React.FC<TableActionsProps> = ({
       >
         Fold
       </button>
+      {process.env.NODE_ENV !== 'production' && (
+        <div
+          style={{
+            position: 'fixed',
+            top: 0,
+            right: 0,
+            background: 'rgba(0,0,0,0.6)',
+            color: '#fff',
+            padding: '4px',
+            fontSize: '12px',
+          }}
+        >
+          Seat: {String(mySeat)} | To act: {String(turn.toActSeat)} | Street: {handState?.street}
+          <br />
+          ToMatch: {turn.toMatch} | MyCommit: {turn.myCommit} | Owe: {turn.owe}
+        </div>
+      )}
     </div>
   );
 };
