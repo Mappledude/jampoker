@@ -70,7 +70,13 @@
     auth.onAuthStateChanged((u) => {
       if (!u) return;
       if (!tableId) return;
-      startActionWorker(tableId, u.uid);
+
+      getDoc(doc(db, `tables/${tableId}`))
+        .then((s) => {
+          const isAdmin = s.exists() && s.data()?.createdByUid === u.uid;
+          if (isAdmin) startActionWorker(tableId, u.uid);
+        })
+        .catch((e) => console.error("host.check.error", e));
     });
     document.body.classList.add('variant-v1');
     if (window.jamlog) window.jamlog.setTableId(tableId || null);
@@ -107,6 +113,19 @@
     let seatCountDesync = false;
     const tableRef = tableId ? doc(db, 'tables', tableId) : null;
     const handRef = tableId ? doc(db, handDocPath(tableId)) : null;
+
+    let startBound = false;
+    function bindStartHand(btn) {
+      if (startBound) return;
+      startBound = true;
+      btn.addEventListener('click', async () => {
+        if (btn.disabled) return;
+        btn.disabled = true;
+        try { await startHand(); } finally {
+          // keep disabled until hand subscription confirms
+        }
+      }, { once: true });
+    }
 
     function subscribeHandState(tableId, onChange) {
       const path = handDocPath(tableId);
@@ -330,7 +349,7 @@
         startBtn.disabled = handActive || !enable;
         if (!startBtn.disabled) {
           startBtn.removeAttribute('title');
-          startBtn.addEventListener('click', startHand, { once: true });
+          bindStartHand(startBtn);
         } else if (handActive) {
           startBtn.title = 'Hand already in progress';
         }

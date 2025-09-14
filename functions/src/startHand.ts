@@ -20,6 +20,11 @@ export const startHand = onCall(async (request) => {
     ]);
 
     const hand = handSnap.data() as any;
+    const nextHandNo = (typeof hand?.handNo === 'number' ? hand.handNo : 0) + 1;
+    if (hand?.handNo === nextHandNo) {
+      // Idempotent: hand already exists for this hand number
+      return { ok: true };
+    }
     if (hand?.street) {
       // Hand already started; idempotent return
       return { ok: true };
@@ -43,7 +48,7 @@ export const startHand = onCall(async (request) => {
     const sbSeat = next(occupied, dealer);
     const bbSeat = next(occupied, sbSeat);
     const toActSeat = next(occupied, bbSeat);
-    const handNo = (typeof hand?.handNo === 'number' ? hand.handNo : 0) + 1;
+    const handNo = nextHandNo;
 
     const table = tableSnap.data() as any || {};
     const sb = table?.blinds?.sbCents || 0;
