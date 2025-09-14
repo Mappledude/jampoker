@@ -13,8 +13,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Cleanup stale preview channels (>3d)
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          npm i -g firebase-tools@latest
+          npx firebase-tools hosting:channels:list --site jam-poker --project jam-poker --json > channels.json
+          node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('channels.json','utf8'));const now=Date.now();const stale=(x.result||[]).filter(c=>c.expireTime && new Date(c.expireTime).getTime()<now).map(c=>c.name.split('/').pop());for(const id of stale){console.log('Deleting',id);}" 
+          for id in $(node -e "const fs=require('fs');const x=JSON.parse(fs.readFileSync('channels.json','utf8'));const now=Date.now();const stale=(x.result||[]).filter(c=>c.expireTime && new Date(c.expireTime).getTime()<now).map(c=>c.name.split('/').pop());console.log(stale.join(' '))"); do
+            [ -z "$id" ] || npx firebase-tools hosting:channel:delete "$id" --site jam-poker --project jam-poker --force
+          done
       - uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
           projectId: jam-poker
+          channelId: pr-${{ github.event.pull_request.number }}
+          expires: 3d
+
