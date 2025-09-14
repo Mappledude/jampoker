@@ -1,34 +1,14 @@
 rules_version = '2';
 service cloud.firestore {
-  // Returns a nested map or a default when missing or not a map.
-  function mapOr(m, k, d) {
-    return (k in m && m[k] is map) ? m[k] : d;
-  }
-
-  // Returns a value from a map or a default when the key is missing.
-  function getOr(m, k, d) {
-    return (k in m) ? m[k] : d;
-  }
-
-  // Checks for a two-level deep key like m[k1][k2].
-  function has2(m, k1, k2) {
-    return (k1 in m) && (m[k1] is map) && (k2 in m[k1]);
-  }
-
   match /databases/{database}/documents {
+    function authed() {
+      return request.auth != null;
+    }
 
     function isAdmin() {
       return request.auth != null && request.auth.token.admin == true;
     }
 
-    function tableDoc(tableId) {
-      return get(/databases/$(database)/documents/tables/$(tableId));
-    }
-    function isTableAdmin(tableId) {
-      return request.auth != null &&
-             tableDoc(tableId).data.createdByUid != null &&
-             tableDoc(tableId).data.createdByUid == request.auth.uid;
-    }
 
     // Helpers for key shape validation
     function onlyAllowedKeys(allowed) {
@@ -85,53 +65,8 @@ service cloud.firestore {
 
       // Canonical hand state path:
       match /handState/{docId} {
-        allow read: if true;
-
-        function streetToNum(s) {
-          return s == 'preflop' ? 0
-               : s == 'flop' ? 1
-               : s == 'turn' ? 2
-               : 3;
-        }
-
-        function actorIs(tableId, seat) {
-          return request.auth != null &&
-                 get(/databases/$(database)/documents/tables/$(tableId)/seats/$(seat))
-                   .data.occupiedBy == request.auth.uid;
-        }
-
-        function isCheck(tableId) {
-          let seat = resource.data.toActSeat;
-          let bet = resource.data.betToMatchCents;
-          let commits = mapOr(resource.data, 'commits', {});
-          let oldCommit = getOr(commits, seat, 0);
-          let reqCommits = mapOr(request.resource.data, 'commits', {});
-          let newCommit = getOr(reqCommits, seat, oldCommit);
-          let delta = newCommit - oldCommit;
-          return actorIs(tableId, seat) && bet == oldCommit && delta == 0 &&
-                 request.resource.data.diff(resource.data).changedKeys()
-                   .hasOnly(['toActSeat','updatedAt','street','lastAggressorSeat','betToMatchCents']) &&
-                 streetToNum(request.resource.data.street) >= streetToNum(resource.data.street) &&
-                 request.resource.data.toActSeat != resource.data.toActSeat;
-        }
-
-        function isCall(tableId) {
-          let seat = resource.data.toActSeat;
-          let bet = resource.data.betToMatchCents;
-          let commits = mapOr(resource.data, 'commits', {});
-          let oldCommit = getOr(commits, seat, 0);
-          let reqCommits = mapOr(request.resource.data, 'commits', {});
-          let newCommit = getOr(reqCommits, seat, 0);
-          let delta = newCommit - oldCommit;
-          return actorIs(tableId, seat) && delta == bet - oldCommit && delta >= 0 &&
-                 request.resource.data.diff(resource.data).changedKeys()
-                   .hasOnly(['toActSeat','updatedAt','commits','street','lastAggressorSeat','betToMatchCents']) &&
-                 streetToNum(request.resource.data.street) >= streetToNum(resource.data.street) &&
-                 request.resource.data.toActSeat != resource.data.toActSeat;
-        }
-
-        allow update: if isCheck(tableId) || isCall(tableId);
-        allow create, delete: if isTableAdmin(tableId);
+        allow read: if authed();
+        allow write: if false;
       }
     }
 

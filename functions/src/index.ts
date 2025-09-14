@@ -7,6 +7,7 @@ import { onDocumentWritten, onDocumentUpdated, onDocumentCreated } from "firebas
 export { takeActionTX } from "./takeActionTX";
 export { leaveSeatTX } from "./leaveSeatTX";
 export { onHandEndCleanup } from "./handEnd";
+export { pokerCall } from "./pokerCall";
 
 
 function getTableBlinds(table: any) {
