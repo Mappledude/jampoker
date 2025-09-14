@@ -112,6 +112,8 @@ export const onActionCreated = onDocumentCreated(
     const seatRef = tableRef.collection("seats").doc(String(action.seat));
 
     try {
+      const actionRef = event.data!.ref;
+      let rejected = false;
       await db.runTransaction(async (tx) => {
         const [handSnap, seatSnap, seatsSnap] = await Promise.all([
           tx.get(handRef),
@@ -127,8 +129,16 @@ export const onActionCreated = onDocumentCreated(
         }));
 
         const foldedSet = new Set<number>(hand.folded ?? []);
-        if (action.seat !== hand.toActSeat) return;
-        if (foldedSet.has(action.seat)) return;
+        if (action.seat !== hand.toActSeat || foldedSet.has(action.seat)) {
+          tx.update(actionRef, {
+            status: "rejected",
+            reason: "not-your-turn",
+            expectedSeat: hand.toActSeat,
+            actualSeat: action.seat,
+          });
+          rejected = true;
+          return;
+        }
 
         const commits = hand.commits || {};
         const playerCommit = commits?.[action.seat] ?? commits?.[String(action.seat)] ?? 0;
@@ -174,7 +184,9 @@ export const onActionCreated = onDocumentCreated(
             return;
         }
       });
-      await event.data?.ref.update({ status: "applied" });
+      if (!rejected) {
+        await actionRef.update({ status: "applied" });
+      }
     } catch (err: any) {
       await event.data?.ref.update({
         status: "error",

@@ -359,10 +359,10 @@ export const onHandCreated = onDocumentCreated(
         hand.board = [];
       }
 
-      const roundStartSeatNum =
-        seats.length === 2
-          ? dealerSeat.seatNum
-          : (bbSeat.seatNum + 1) % seats.length;
+      const headsUp = seats.length === 2;
+      const roundStartSeatNum = headsUp
+        ? sbSeat.seatNum
+        : (bbSeat.seatNum + 1) % seats.length;
 
       tx.update(handRef, {
         positions: {
