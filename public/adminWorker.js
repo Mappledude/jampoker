@@ -1,5 +1,5 @@
 import {
-  getFirestore, doc, collection, query, where, limit,
+  getFirestore, doc, collection, query, where, orderBy, limit,
   onSnapshot, runTransaction, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -9,6 +9,7 @@ export function startActionWorker(tableId, adminUid) {
   const q = query(
     collection(db, `tables/${tableId}/actions`),
     where("applied", "==", false),
+    orderBy("createdAt", "asc"),
     limit(1)
   );
 

@@ -29,13 +29,13 @@
   <script type="module">
     import { app } from "/firebase-init.js";
     import { startActionWorker } from "/adminWorker.js";
+    import { startHand } from "/startHand.js";
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
       doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
       writeBatch, runTransaction, increment, getDoc, addDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady, auth } from "/auth.js";
-    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
       import { handDocPath } from "/js/dbPaths.js";
       import { logEvent } from "/js/debug.js";
 
@@ -66,7 +66,20 @@
 
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
-    const fns = getFunctions(app);
+    const controlsRoot = document.getElementById('table-controls') || document;
+    controlsRoot.addEventListener('click', async (e) => {
+      const btn = e.target.closest('[data-action="start-hand"]');
+      if (!btn) return;
+      if (btn.disabled) return;
+      btn.disabled = true;
+      try {
+        await startHand(tableId);
+        // keep disabled until hand.state subscription confirms presence
+      } catch (err) {
+        console.error('startHand failed', err);
+        btn.disabled = false;
+      }
+    });
     auth.onAuthStateChanged((u) => {
       if (!u) return;
       if (!tableId) return;
@@ -113,19 +126,6 @@
     let seatCountDesync = false;
     const tableRef = tableId ? doc(db, 'tables', tableId) : null;
     const handRef = tableId ? doc(db, handDocPath(tableId)) : null;
-
-    let startBound = false;
-    function bindStartHand(btn) {
-      if (startBound) return;
-      startBound = true;
-      btn.addEventListener('click', async () => {
-        if (btn.disabled) return;
-        btn.disabled = true;
-        try { await startHand(); } finally {
-          // keep disabled until hand subscription confirms
-        }
-      }, { once: true });
-    }
 
     function subscribeHandState(tableId, onChange) {
       const path = handDocPath(tableId);
@@ -316,7 +316,7 @@
       const activeSeatCount = t.activeSeatCount ?? 0;
       const desyncLine = seatCountDesync ? `<div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>` : '';
       const probeBtnHtml = isDebug() ? `<button id="btn-rules-probe" class="small" style="margin-left:8px;">Rules Probe</button>` : '';
-      const startBtnHtml = `<div id="start-hand-wrap" style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button>${probeBtnHtml}<div id="start-hand-hint" class="small" style="margin-top:4px;display:none;"></div></div>`;
+      const startBtnHtml = `<div id="start-hand-wrap" style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small" data-action="start-hand">Start Hand</button>${probeBtnHtml}<div id="start-hand-hint" class="small" style="margin-top:4px;display:none;"></div></div>`;
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
@@ -349,7 +349,6 @@
         startBtn.disabled = handActive || !enable;
         if (!startBtn.disabled) {
           startBtn.removeAttribute('title');
-          bindStartHand(startBtn);
         } else if (handActive) {
           startBtn.title = 'Hand already in progress';
         }
@@ -541,37 +540,6 @@
       }
     }
 
-    async function startHand() {
-      if (window.jamlog) window.jamlog.push('hand.start.click');
-      try {
-        await awaitAuthReady();
-        const path = handDocPath(tableId);
-        const uid = auth.currentUser?.uid || 'anon';
-        let createdByUid = null;
-        try {
-          const tSnap = await getDoc(doc(db, `tables/${tableId}`));
-          createdByUid = tSnap.exists() ? (tSnap.data().createdByUid || null) : null;
-        } catch {}
-        const isAdmin = !!(createdByUid && createdByUid === uid);
-        logEvent('hand.start.ruleProbe', { tableId, path, uid, createdByUid, isAdmin, keys: [] });
-        const callable = httpsCallable(fns, 'startHand');
-        await callable({ tableId });
-        logEvent('hand.start.ok', { path });
-        if (window.jamlog) window.jamlog.push('hand.start.ok');
-      } catch (err) {
-        const code = err?.code;
-        const msg = err?.message;
-        const path = handDocPath(tableId);
-        const uid = auth.currentUser?.uid || 'anon';
-        const createdByUid = tableData?.createdByUid || null;
-        const isAdmin = !!(createdByUid && createdByUid === uid);
-        logEvent('hand.start.fail', { code, message: msg, path, uid, createdByUid, isAdmin });
-        if (window.jamlog) window.jamlog.push('hand.start.fail', { code, message: msg });
-        if (code === 'failed-precondition') alert('Need 2+ players');
-        else alert('Error starting hand.');
-      }
-    }
-
     async function rulesProbe(tableId) {
       const probeRef = doc(db, `tables/${tableId}/handState/_probe`);
       try {
@@ -685,6 +653,7 @@
         ...action,
         createdByUid: uid,
         createdAt: serverTimestamp(),
+        applied: false,
       });
     }
 
