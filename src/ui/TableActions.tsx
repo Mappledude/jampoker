@@ -71,12 +71,22 @@ export const TableActions: React.FC<TableActionsProps> = ({
     });
   }, [uid, mySeat, handState?.toActSeat, handState?.street, (handState as any)?.handNo, seats]);
 
+  const MIN_DELAY = 400;
+  const MAX_DELAY = 600;
+
   useEffect(() => {
     if (!pending) return;
+    const timer = setTimeout(() => setPending(false), MAX_DELAY);
     const updated: any = handState && (handState as any).updatedAt;
-    if (updated?.toMillis && updated.toMillis() > lastActionAtRef.current) {
+    const ready =
+      updated?.toMillis &&
+      updated.toMillis() > lastActionAtRef.current &&
+      Date.now() - lastActionAtRef.current >= MIN_DELAY;
+    if (ready) {
       setPending(false);
+      clearTimeout(timer);
     }
+    return () => clearTimeout(timer);
   }, [handState?.updatedAt, pending]);
 
   if (!turn.ready) {
