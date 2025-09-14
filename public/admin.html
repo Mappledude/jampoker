@@ -184,6 +184,7 @@
   <script type="module">
     import { app } from "/firebase-init.js";
     import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug } from "/common.js";
+    import { startActionWorker } from "/adminWorker.js";
       import {
         collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
         doc, updateDoc, deleteDoc, setDoc, writeBatch, getDocs, getDoc
@@ -477,6 +478,7 @@
     const tablesData = {};
     const seatCounts = {};
     const seatUnsubs = {};
+    const actionWorkers = {};
     const renderTables = () => {
       const rows = Object.entries(tablesData)
         .sort((a, b) => (b[1].createdAt?.toMillis?.() || 0) - (a[1].createdAt?.toMillis?.() || 0))
@@ -526,6 +528,8 @@
             if (seatUnsubs[id]) seatUnsubs[id]();
             delete seatUnsubs[id];
             delete seatCounts[id];
+            if (actionWorkers[id]) actionWorkers[id]();
+            delete actionWorkers[id];
           } else {
             tablesData[id] = change.doc.data();
             if (!seatUnsubs[id]) {
@@ -539,6 +543,11 @@
                 seatCounts[id] = cnt;
                 renderTables();
               });
+            }
+            const t = tablesData[id];
+            const uid = auth.currentUser?.uid;
+            if (uid && t.createdByUid === uid && !actionWorkers[id]) {
+              actionWorkers[id] = startActionWorker(id, uid);
             }
           }
         });
@@ -593,6 +602,7 @@
         else alert('Error starting hand.');
       }
     }
+    await awaitAuthReady();
     startTablesListener();
 
     tablesBody?.addEventListener("click", async (e) => {
@@ -613,7 +623,14 @@
           alert("Error: " + (err?.message || err));
         }
       } else if (target.classList.contains("start-hand")) {
-        await startHand(id);
+        const btn = target;
+        if (btn.disabled) return;
+        btn.disabled = true;
+        try {
+          await startHand(id);
+        } finally {
+          // keep disabled until listener updates UI
+        }
       } else if (target.classList.contains("set-admin")) {
         try {
           await updateDoc(doc(db, 'tables', id), { createdByUid: auth.currentUser.uid });

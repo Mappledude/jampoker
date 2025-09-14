@@ -1,5 +1,5 @@
 import {
-  getFirestore, doc, collection, query, where, orderBy, limit,
+  getFirestore, doc, collection, query, where, limit,
   onSnapshot, runTransaction, serverTimestamp
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 
@@ -9,16 +9,23 @@ export function startActionWorker(tableId, adminUid) {
   const q = query(
     collection(db, `tables/${tableId}/actions`),
     where("applied", "==", false),
-    orderBy("createdAt", "asc"),
     limit(1)
   );
 
-  return onSnapshot(q, (snap) => {
-    snap.docChanges().forEach((ch) => {
-      if (ch.type !== "added") return;
-      applyAction(ch.doc.id).catch(e => console.error("srv.action.error", e));
-    });
-  });
+  return onSnapshot(
+    q,
+    (snap) => {
+      snap.docChanges().forEach((ch) => {
+        if (ch.type !== "added") return;
+        applyAction(ch.doc.id).catch((e) =>
+          console.error("srv.action.error", { code: e?.code, message: e?.message })
+        );
+      });
+    },
+    (err) => {
+      console.error("srv.action.listener_error", { code: err.code, message: err.message });
+    }
+  );
 
   async function applyAction(actionId) {
     const actionRef = doc(db, `tables/${tableId}/actions/${actionId}`);

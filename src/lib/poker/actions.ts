@@ -1,4 +1,4 @@
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { collection, doc, serverTimestamp, setDoc } from 'firebase/firestore';
 
 export type PlayerAction = {
   type: 'check' | 'call' | 'bet' | 'raise' | 'fold';
@@ -13,11 +13,14 @@ export async function enqueueAction(
   handNo: number,
   action: PlayerAction
 ) {
-  await addDoc(collection(db, `tables/${tableId}/actions`), {
+  const ref = doc(collection(db, `tables/${tableId}/actions`));
+  await setDoc(ref, {
     handNo,
     seat,
     ...action,
     createdByUid: uid,
     createdAt: serverTimestamp(),
+    applied: false,
+    clientTs: Date.now(),
   });
 }
