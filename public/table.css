@@ -53,3 +53,14 @@ body.variant-v1 .community-card.enter {
 .seat .pos-badge.dealer { background: #6b7280; }
 .seat .pos-badge.sb { background: #3b82f6; }
 .seat .pos-badge.bb { background: #1d4ed8; }
+
+/* Action buttons */
+.action-btn:active,
+.action-btn.pressed {
+  transform: translateY(1px);
+}
+
+.action-btn[disabled] {
+  pointer-events: none;
+  opacity: .5;
+}

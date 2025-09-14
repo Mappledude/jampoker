@@ -66,7 +66,8 @@ service cloud.firestore {
       // Canonical hand state path:
       match /handState/{docId} {
         allow read: if authed();
-        allow write: if false;
+        // Only admins may directly modify hand state; players enqueue actions instead
+        allow write: if isAdmin();
       }
 
       match /actions/{actionId} {

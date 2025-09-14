@@ -9,3 +9,17 @@ html,body{ margin:0; padding:0; font-family:system-ui,-apple-system,Arial,sans-s
 h1{ margin:0 0 8px 0; font-size:28px; }
 .small{ opacity:.7; font-size:14px; }
 .card-chip{ display:inline-block; padding:2px 4px; border:1px solid #334155; border-radius:4px; margin-right:4px; }
+
+/* Toolbar */
+.toolbar-btn {
+  background:none;
+  border:1px solid #334155;
+  color:var(--ink);
+  padding:4px 8px;
+  border-radius:8px;
+  cursor:pointer;
+}
+
+/* Chat panel */
+.chat-panel { display:none; }
+.chat-panel.open { display:block; }
