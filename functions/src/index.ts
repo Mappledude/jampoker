@@ -8,6 +8,7 @@ export { takeActionTX } from "./takeActionTX";
 export { leaveSeatTX } from "./leaveSeatTX";
 export { onHandEndCleanup } from "./handEnd";
 export { pokerCall } from "./pokerCall";
+export { startHand } from "./startHand";
 
 
 function getTableBlinds(table: any) {
