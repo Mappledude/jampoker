@@ -32,6 +32,8 @@
       writeBatch, runTransaction, increment, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady, auth } from "/auth.js";
+    import { handDocPath } from "/js/dbPaths.js";
+    import { logEvent } from "/js/debug.js";
 
     const shortUid = (uid) => uid ? uid.slice(0, 6) : 'null';
 
@@ -78,16 +80,28 @@
     let seatCountTimer = null;
     let seatCountDesync = false;
     const tableRef = tableId ? doc(db, 'tables', tableId) : null;
-    const handRef = tableId ? doc(db, 'tables', tableId, 'hand', 'state') : null;
+    const handRef = tableId ? doc(db, handDocPath(tableId)) : null;
+
+    function subscribeHandState(tableId, onChange) {
+      const path = handDocPath(tableId);
+      const ref = doc(db, path);
+      logEvent('hand.state.sub.path', { path });
+      return onSnapshot(ref, (snap) => {
+        if (!snap.exists()) return onChange(null);
+        onChange(snap.data());
+      }, (err) => {
+        if (window.jamlog) window.jamlog.push('hand.state.sub.error', { code: err?.code, message: err?.message });
+      });
+    }
 
     if (!tableId) {
       errorEl.style.display = 'block';
       errorEl.innerHTML = '<h1>Table not found</h1><a href="/lobby.html">Back to Lobby</a>';
     } else {
       if (window.jamlog) window.jamlog.push('hand.state.sub.start');
-      unsubHandState = onSnapshot(handRef, (snap) => {
-        if (snap.exists()) {
-          handState = snap.data();
+      unsubHandState = subscribeHandState(tableId, (data) => {
+        if (data) {
+          handState = data;
           noHandBanner.style.display = 'none';
           renderSeats();
           renderPlayerBoard();
@@ -99,8 +113,6 @@
           noHandBanner.style.display = '';
           if (window.jamlog) window.jamlog.push('hand.state.sub.empty');
         }
-      }, (err) => {
-        if (window.jamlog) window.jamlog.push('hand.state.sub.error', { code: err?.code, message: err?.message });
       });
       onSnapshot(tableRef, (snap) => {
         debugLog('table.tableSnapshot', snap.exists());
@@ -467,6 +479,8 @@
       const occupied = seatData.filter(s => s.occupiedBy).map(s => s.seatIndex).sort((a,b) => a - b);
       try {
         await awaitAuthReady();
+        const path = handDocPath(tableId);
+        const handRef = doc(db, path);
         let currentState = handState;
         if (!currentState) {
           const snap = await getDoc(handRef);
@@ -508,17 +522,27 @@
           lastAggressorSeat: bbSeat,
           updatedAt: serverTimestamp(),
         };
+        const uid = auth.currentUser?.uid || 'anon';
+        const createdByUid = tableData?.createdByUid || null;
+        const isAdmin = !!(createdByUid && createdByUid === uid);
+        logEvent('hand.start.ruleProbe', { tableId, path, uid, createdByUid, isAdmin, keys: Object.keys(payload) });
         if (window.jamlog) window.jamlog.push('hand.start.payload.keys', { keys: Object.keys(payload) });
         await setDoc(handRef, payload, { merge: true });
-        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street: 'preflop' });
+        logEvent('hand.start.ok', { path });
+        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street:'preflop' });
       } catch (err) {
+        const path = handDocPath(tableId);
+        const uid = auth.currentUser?.uid || 'anon';
+        const createdByUid = tableData?.createdByUid || null;
+        const isAdmin = !!(createdByUid && createdByUid === uid);
+        logEvent('hand.start.fail', { code: err?.code, message: err?.message, path, uid, createdByUid, isAdmin });
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
         alert('Error starting hand.');
       }
     }
 
     async function rulesProbe(tableId) {
-      const probeRef = doc(db, 'tables', tableId, 'hand', '_probe');
+      const probeRef = doc(db, `tables/${tableId}/handState/_probe`);
       try {
         await setDoc(probeRef, { updatedAt: serverTimestamp() }, { merge: true });
         if (window.jamlog) window.jamlog.push('hand.rules.probe.ok');

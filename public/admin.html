@@ -190,6 +190,8 @@
       } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { getAuth, onAuthStateChanged, signInAnonymously } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-auth.js";
     import { awaitAuthReady, isAuthed } from "/auth.js";
+    import { handDocPath } from "/js/dbPaths.js";
+    import { logEvent } from "/js/debug.js";
 
     if (window.jamlog && isDebug()) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'ADMIN' });
@@ -566,7 +568,8 @@
           const s = d.data();
           if (s.occupiedBy) occupied.push(s.seatIndex);
         });
-        const stateRef = doc(db, 'tables', tableId, 'hand', 'state');
+        const path = handDocPath(tableId);
+        const stateRef = doc(db, path);
         const stateSnap = await getDoc(stateRef);
         const currentState = stateSnap.exists() ? stateSnap.data() : null;
         if (occupied.length < 2) {
@@ -602,15 +605,31 @@
           lastAggressorSeat: bbSeat,
           updatedAt: serverTimestamp(),
         };
+        const uid = auth.currentUser?.uid || 'anon';
+        const tRef = doc(db, `tables/${tableId}`);
+        const tSnap = await getDoc(tRef);
+        const createdByUid = tSnap.exists() ? (tSnap.data().createdByUid || null) : null;
+        const isAdmin = !!(createdByUid && createdByUid === uid);
+        logEvent('hand.start.ruleProbe', { tableId, path, uid, createdByUid, isAdmin, keys: Object.keys(payload) });
         if (window.jamlog) window.jamlog.push('hand.start.payload.keys', { keys: Object.keys(payload) });
         await setDoc(stateRef, payload, { merge: true });
-        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street: 'preflop' });
+        logEvent('hand.start.ok', { path });
+        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street:'preflop' });
       } catch (err) {
+        const path = handDocPath(tableId);
+        const uid = auth.currentUser?.uid || 'anon';
+        const tRef = doc(db, `tables/${tableId}`);
+        let createdByUid = null;
+        try {
+          const tSnap = await getDoc(tRef);
+          createdByUid = tSnap.exists() ? (tSnap.data().createdByUid || null) : null;
+        } catch {}
+        const isAdmin = !!(createdByUid && createdByUid === uid);
+        logEvent('hand.start.fail', { code: err?.code, message: err?.message, path, uid, createdByUid, isAdmin });
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
         alert('Error starting hand.');
       }
     }
-
     startTablesListener();
 
     tablesBody?.addEventListener("click", async (e) => {
@@ -635,6 +654,7 @@
       } else if (target.classList.contains("set-admin")) {
         try {
           await updateDoc(doc(db, 'tables', id), { createdByUid: auth.currentUser.uid });
+          logEvent('admin.backfill.owner.ok', { tableId: id });
           alert('Set as admin.');
         } catch (err) {
           alert('Error: ' + (err?.message || err));
