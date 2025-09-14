@@ -116,8 +116,12 @@ export const onActionCreated = onDocumentCreated(
           rejected = true;
           return;
         }
-        const hand = handSnap.data() as any;
-        const seat = seatSnap.data() as any;
+          const hand = handSnap.data() as any;
+          hand.toActSeat = toSeatNumber(hand?.toActSeat);
+          hand.sbSeat = toSeatNumber(hand?.sbSeat);
+          hand.bbSeat = toSeatNumber(hand?.bbSeat);
+          hand.dealerSeat = toSeatNumber(hand?.dealerSeat);
+          const seat = seatSnap.data() as any;
         const seats: SeatData[] = seatsSnap.docs.map((d) => ({
           seat: d.data().seatIndex ?? parseInt(d.id, 10),
           stackCents: d.data().stackCents ?? 0,
