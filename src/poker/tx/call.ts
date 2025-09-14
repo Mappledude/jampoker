@@ -1,17 +1,15 @@
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { enqueueAction } from '../../lib/poker/actions';
 
 export async function call(
   db: any,
   tableId: string,
   seat: number,
   uid: string,
+  handNo: number,
   amountCents?: number
 ): Promise<void> {
-  await addDoc(collection(db, `tables/${tableId}/actions`), {
-    seat,
+  await enqueueAction(db, tableId, seat, uid, handNo, {
     type: 'call',
     amountCents,
-    createdByUid: uid,
-    createdAt: serverTimestamp(),
   });
 }

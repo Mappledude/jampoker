@@ -1,15 +1,11 @@
-import { addDoc, collection, serverTimestamp } from 'firebase/firestore';
+import { enqueueAction } from '../../lib/poker/actions';
 
 export async function fold(
   db: any,
   tableId: string,
   seat: number,
-  uid: string
+  uid: string,
+  handNo: number
 ): Promise<void> {
-  await addDoc(collection(db, `tables/${tableId}/actions`), {
-    seat,
-    type: 'fold',
-    createdByUid: uid,
-    createdAt: serverTimestamp(),
-  });
+  await enqueueAction(db, tableId, seat, uid, handNo, { type: 'fold' });
 }

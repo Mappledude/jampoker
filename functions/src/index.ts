@@ -724,4 +724,4 @@ export const onVariantChosen = onDocumentUpdated(
   }
 );
 
-export { onActionCreated } from "./actionProcessor";
+export { onActionCreate } from "./onActionCreate";
