@@ -145,4 +145,20 @@ export function showSeatsDebug(tableId, seatDocs) {
   box.textContent = `debug.tableId=${tableId}\n${paths}`;
 }
 
+export function toast(msg) {
+  const el = document.createElement('div');
+  el.textContent = msg;
+  el.style.position = 'fixed';
+  el.style.bottom = '20px';
+  el.style.left = '50%';
+  el.style.transform = 'translateX(-50%)';
+  el.style.background = '#7f1d1d';
+  el.style.color = 'white';
+  el.style.padding = '8px 12px';
+  el.style.borderRadius = '8px';
+  el.style.zIndex = '9999';
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 4000);
+}
+
 

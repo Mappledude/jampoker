@@ -183,7 +183,7 @@
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
-    import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug } from "/common.js";
+    import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug, toast } from "/common.js";
       import {
         collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
         doc, updateDoc, deleteDoc, setDoc, writeBatch, getDocs, getDoc
@@ -598,7 +598,7 @@
         if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street: 'preflop' });
       } catch (err) {
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
-        alert('Error starting hand.');
+        toast('Cannot start hand: Firestore rules not deployed for hand/state.');
       }
     }
 

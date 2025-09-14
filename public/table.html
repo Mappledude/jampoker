@@ -26,7 +26,7 @@
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
-    import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
+    import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog, toast } from "/common.js";
     import {
       doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
       writeBatch, runTransaction, increment, getDoc
@@ -242,8 +242,8 @@
       const desyncLine = seatCountDesync ? `<div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>` : '';
       const current = getCurrentPlayer();
       const showStart = (current && seatData.some(s => s.occupiedBy === current.id)) || isDebug();
-      const probeBtnHtml = isDebug() ? `<button id="btn-rules-probe" class="small" style="margin-left:8px;">Rules Probe</button>` : '';
-      const startBtnHtml = showStart ? `<div style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button>${probeBtnHtml}</div>` : '';
+      const probeHtml = isDebug() ? `<div style="margin-top:8px;"><button id="rules-probe" class="small">Rules Probe</button><div id="rules-status" class="small mono"></div></div>` : '';
+      const startBtnHtml = showStart ? `<div style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small">Start Hand</button></div>${probeHtml}` : probeHtml;
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
@@ -254,8 +254,8 @@
       `;
       if (showStart) {
         document.getElementById('btn-start-hand')?.addEventListener('click', startHand);
-        document.getElementById('btn-rules-probe')?.addEventListener('click', () => rulesProbe(tableId));
       }
+      document.getElementById('rules-probe')?.addEventListener('click', () => rulesProbe(tableId));
     }
 
     function renderHand() {
@@ -492,17 +492,20 @@
         if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street: 'preflop' });
       } catch (err) {
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
-        alert('Error starting hand.');
+        toast('Cannot start hand: Firestore rules not deployed for hand/state.');
       }
     }
 
     async function rulesProbe(tableId) {
       const probeRef = doc(db, 'tables', tableId, 'hand', '_probe');
+      const statusEl = document.getElementById('rules-status');
       try {
         await setDoc(probeRef, { updatedAt: serverTimestamp() }, { merge: true });
         if (window.jamlog) window.jamlog.push('hand.rules.probe.ok');
+        if (statusEl) statusEl.textContent = 'Rules Probe: OK (hand/state write allowed)';
       } catch (e) {
         if (window.jamlog) window.jamlog.push('hand.rules.probe.fail', { code: e.code, message: e.message });
+        if (statusEl) statusEl.textContent = `Rules Probe: FAIL ${e.code} ${e.message}`;
       }
     }
 
