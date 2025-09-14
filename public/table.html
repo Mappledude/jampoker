@@ -329,6 +329,7 @@
       const bbName = getNameBySeat(h.positions?.bbSeatNum);
       const actorName = getNameBySeat(h.actorSeatNum);
       const board = (h.board || []).map(c => `<span class="card-chip">${formatCard(c)}</span>`).join(' ');
+      const potCents = Object.values(h.commits || {}).reduce((a, b) => a + (b || 0), 0);
       let contrib = '';
       if (h.contributions) {
         const parts = [];
@@ -346,7 +347,7 @@
         : '';
       handEl.innerHTML = `
         <div>Current Hand: ${vLabel} • Dealer: ${dealerName} • Status: ${h.status}</div>
-        <div class="small" style="margin-top:4px;">Pot: ${dollars(h.potCents || 0)}</div>
+        <div class="small" style="margin-top:4px;">Pot: ${dollars(potCents)}</div>
         <div class="small">Stage: ${stageStr}</div>
         ${boardLine}
         <div class="small">Positions: Dealer ${dealerName}, SB ${sbName}, BB ${bbName}</div>

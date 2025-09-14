@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { HandState } from '../poker/handMath';
 import { telemetry } from '../telemetry';
-import { computeTurnFromDoc } from '../lib/turn';
+import { computeLiveTurn } from '../lib/turn';
 import { toSeatNumber } from '../lib/seats';
 import { toast } from 'react-toastify';
 import { useLatest } from './hooks/useLatest';
@@ -32,26 +32,31 @@ export const TableActions: React.FC<TableActionsProps> = ({
   onFold,
 }) => {
   const [pending, setPending] = useState(false);
-  const turn = computeTurnFromDoc(
+  const turn = computeLiveTurn(
     handState && (handState as any)?.loaded ? (handState as any) : null,
     seats as any[],
     uid
   );
+  const myStack = turn.mySeat >= 0 ? Number((seats as any[])[turn.mySeat]?.stackCents ?? 0) : 0;
+  const canAct = turn.toActSeat === turn.mySeat;
+  const canCheck = canAct && turn.owe === 0;
+  const canCall = canAct && turn.owe > 0 && myStack >= turn.owe;
+  const canFold = canAct;
   const handRef = useLatest(handState);
   const seatsRef = useLatest(seats);
-  const canActRef = useRef(turn.canAct);
+  const canActRef = useRef(canAct);
   const lastActionAtRef = useRef(0);
 
   useEffect(() => {
-    canActRef.current = turn.canAct;
+    canActRef.current = canAct;
     telemetry('action.ui.gated', {
-      canAct: turn.canAct,
-      canCheck: turn.canCheck,
-      canCall: turn.canCall,
-      canBet: turn.canBet,
-      canFold: turn.canFold,
+      canAct,
+      canCheck,
+      canCall,
+      canBet: canAct && turn.toMatch === 0 && myStack > 0,
+      canFold,
     });
-  }, [turn.canAct, turn.canCheck, turn.canCall, turn.canBet, turn.canFold]);
+  }, [canAct, canCheck, canCall, canFold, turn.toMatch, myStack]);
 
   useEffect(() => {
     telemetry('turn.snapshot', {
@@ -86,22 +91,28 @@ export const TableActions: React.FC<TableActionsProps> = ({
     return () => clearTimeout(timer);
   }, [handState?.updatedAt, pending]);
 
-  if (!turn.ready) {
+  const ready = handState && turn.mySeat >= 0 && turn.toActSeat !== null;
+  if (!ready) {
     return null;
   }
 
-  const label = turn.canCheck
+  const label = canCheck
     ? 'Check'
     : `Call $${(turn.owe / 100).toFixed(2)}`;
 
   const handlePrimary = async () => {
     const handNow = handRef.current;
     const seatsNow = seatsRef.current as any[];
-    const turnNow = computeTurnFromDoc(
+    const turnNow = computeLiveTurn(
       handNow && (handNow as any)?.loaded ? (handNow as any) : null,
       seatsNow,
       uid
     );
+    const stackNow =
+      turnNow.mySeat >= 0 ? Number(seatsNow[turnNow.mySeat]?.stackCents ?? 0) : 0;
+    const canActNow = turnNow.toActSeat === turnNow.mySeat;
+    const canCheckNow = canActNow && turnNow.owe === 0;
+    const canCallNow = canActNow && turnNow.owe > 0 && stackNow >= turnNow.owe;
     telemetry('turn.snapshot', {
       myUid: uid,
       mySeat: turnNow.mySeat,
@@ -112,7 +123,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
       street: (handNow as any)?.street,
       handNo: (handNow as any)?.handNo,
     });
-    if (!turnNow.canAct || (!turnNow.canCheck && !turnNow.canCall)) {
+    if (!canActNow || (!canCheckNow && !canCallNow)) {
       telemetry('action.guard', {
         reason: 'not-your-turn',
         myUid: uid,
@@ -129,18 +140,18 @@ export const TableActions: React.FC<TableActionsProps> = ({
     setPending(true);
     lastActionAtRef.current = Date.now();
     try {
-      if (turnNow.canCheck) {
+      if (canCheckNow) {
         telemetry('action.check.start', { seat: turnNow.mySeat });
         await onCheck();
         telemetry('action.check.ok', { seat: turnNow.mySeat });
-      } else if (turnNow.canCall) {
+      } else if (canCallNow) {
         telemetry('action.call.start', { seat: turnNow.mySeat, amount: turnNow.owe });
         await onCall(turnNow.owe);
         telemetry('action.call.ok', { seat: turnNow.mySeat, amount: turnNow.owe });
       }
     } catch (e: any) {
       const reason = e?.message || 'error';
-      const event = turnNow.canCheck ? 'action.check.fail' : 'action.call.fail';
+      const event = canCheckNow ? 'action.check.fail' : 'action.call.fail';
       telemetry(event, { seat: turnNow.mySeat, reason });
       setPending(false);
     }
@@ -149,11 +160,15 @@ export const TableActions: React.FC<TableActionsProps> = ({
   const handleFold = async () => {
     const handNow = handRef.current;
     const seatsNow = seatsRef.current as any[];
-    const turnNow = computeTurnFromDoc(
+    const turnNow = computeLiveTurn(
       handNow && (handNow as any)?.loaded ? (handNow as any) : null,
       seatsNow,
       uid
     );
+    const stackNow =
+      turnNow.mySeat >= 0 ? Number(seatsNow[turnNow.mySeat]?.stackCents ?? 0) : 0;
+    const canActNow = turnNow.toActSeat === turnNow.mySeat;
+    const canFoldNow = canActNow;
     telemetry('turn.snapshot', {
       myUid: uid,
       mySeat: turnNow.mySeat,
@@ -164,7 +179,7 @@ export const TableActions: React.FC<TableActionsProps> = ({
       street: (handNow as any)?.street,
       handNo: (handNow as any)?.handNo,
     });
-    if (!turnNow.canFold) {
+    if (!canFoldNow) {
       telemetry('action.guard', {
         reason: 'not-your-turn',
         myUid: uid,
@@ -193,16 +208,16 @@ export const TableActions: React.FC<TableActionsProps> = ({
   return (
     <div>
       <button
-        disabled={!turn.canAct || (!turn.canCheck && !turn.canCall) || pending}
+        disabled={!canAct || (!canCheck && !canCall) || pending}
         onClick={handlePrimary}
-        title={!turn.canAct ? 'Not your turn' : undefined}
+        title={!canAct ? 'Not your turn' : undefined}
       >
         {label}
       </button>
       <button
-        disabled={!turn.canFold || pending}
+        disabled={!canFold || pending}
         onClick={handleFold}
-        title={!turn.canAct ? 'Not your turn' : undefined}
+        title={!canAct ? 'Not your turn' : undefined}
       >
         Fold
       </button>

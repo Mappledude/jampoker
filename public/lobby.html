@@ -64,7 +64,8 @@
       if (hand) {
         const vLabel = hand.variant === "omaha" ? "Omaha" : "Hold'em";
         banner = `Current Hand: ${vLabel} • Dealer: ${hand.dealerName || ""} • Status: ${hand.status}`;
-        potLine = `<div class=\"small\">Pot: ${dollars(hand.potCents || 0)}</div>`;
+        const potCents = Object.values(hand.commits || {}).reduce((a, b) => a + (b || 0), 0);
+        potLine = `<div class=\"small\">Pot: ${dollars(potCents)}</div>`;
         stageLine = `<div class=\"small\">Stage: ${stageLabel(hand)}</div>`;
         if (hand.board && hand.board.length) {
           const board = hand.board.map(c => `<span class=\"card-chip\" style=\"font-size:12px;\">${formatCard(c)}</span>`).join(' ');
