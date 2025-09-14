@@ -16,39 +16,17 @@ jobs:
       - name: Install Firebase CLI
         run: npm i -g firebase-tools@latest
 
-      - name: PR Preview deploy (non-blocking, stable channel)
-        env:
-          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
-        run: |
-          set +e
-          CHANNEL="preview"
-          SITE="jampoker"
-          PROJECT="jam-poker"
-          EXPIRES="30d"
+      - name: Firebase Hosting preview (non-blocking)
+        id: hosting_preview
+        continue-on-error: true
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER || '' }}
+          channelId: preview
+          projectId: jam-poker
+          expires: 30d
 
-          if [ -z "${FIREBASE_TOKEN}" ]; then
-            echo "::warning:: FIREBASE_TOKEN not configured; skipping preview deploy."
-            echo "Production: https://jampoker.web.app"
-            exit 0
-          fi
-
-          echo "Attempting preview deploy → channel:${CHANNEL} site:${SITE} project:${PROJECT} expires:${EXPIRES}"
-          OUT="$(npx firebase-tools@latest hosting:channel:deploy "${CHANNEL}" \
-                 --site "${SITE}" --project "${PROJECT}" --expires "${EXPIRES}" \
-                 --token "${FIREBASE_TOKEN}" --json 2>&1)"
-          STATUS=$?
-          echo "${OUT}"
-
-          if [ $STATUS -ne 0 ]; then
-            if echo "${OUT}" | grep -qi "channel quota reached"; then
-              echo "::warning:: Hosting channel quota reached. Preview skipped, PR will not be blocked."
-              echo "Tip: you can clean old channels from Firebase Console → Hosting → Preview Channels."
-            else
-              echo "::warning:: Preview deploy failed (exit ${STATUS}). Skipping failure to unblock merge."
-            fi
-            echo "Production: https://jampoker.web.app"
-            exit 0
-          fi
-
-          echo "✅ Preview deploy succeeded (see URL above)."
-          exit 0
+      - name: Note preview status
+        if: steps.hosting_preview.outcome != 'success'
+        run: echo "::warning:: Hosting preview failed or quota hit; PR will proceed (non-blocking)."

@@ -68,42 +68,11 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      // per-table hand state (single doc: tables/{tableId}/hand/state)
-      match /hand/{docId} {
-        // Anyone can read current hand markers
+      // Canonical hand state path:
+      match /handState/{docId} {
         allow read: if true;
-
-        allow create: if request.auth != null
-          && request.resource.data.keys().subsetOf([
-            'handNo',
-            'dealerSeat',
-            'sbSeat',
-            'bbSeat',
-            'toActSeat',
-            'street',
-            'betToMatchCents',
-            'commits',
-            'lastAggressorSeat',
-            'updatedAt'
-          ])
-          && (isTableAdmin(tableId) || tableDoc(tableId).data.createdByUid == null);
-        allow update: if request.auth != null
-          && request.resource.data.keys().subsetOf([
-            'handNo',
-            'dealerSeat',
-            'sbSeat',
-            'bbSeat',
-            'toActSeat',
-            'street',
-            'betToMatchCents',
-            'commits',
-            'lastAggressorSeat',
-            'updatedAt'
-          ])
-          && isTableAdmin(tableId);
-
-        // No client deletes
-        allow delete: if false;
+        allow create, update: if isTableAdmin(tableId);
+        allow delete: if isTableAdmin(tableId);
       }
     }
 
