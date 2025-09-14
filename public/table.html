@@ -473,18 +473,20 @@
         commits[String(sbSeat)] = sb;
         commits[String(bbSeat)] = bb;
         foldedSeats.clear();
-        await setDoc(handRef, {
+        const payload = {
           handNo,
           dealerSeat: dealer,
           sbSeat,
           bbSeat,
+          toActSeat,
           street: 'preflop',
           betToMatchCents: bb,
           commits,
           lastAggressorSeat: bbSeat,
-          toActSeat,
           updatedAt: serverTimestamp(),
-        }, { merge: true });
+        };
+        if (window.jamlog) window.jamlog.push('hand.start.payload.keys', { keys: Object.keys(payload) });
+        await setDoc(handRef, payload, { merge: true });
         if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street: 'preflop' });
       } catch (err) {
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });

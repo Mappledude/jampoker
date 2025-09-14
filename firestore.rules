@@ -56,14 +56,27 @@ service cloud.firestore {
       }
     }
 
+    // Hand state for a table (single doc: tables/{tableId}/hand/state)
     match /tables/{tableId}/hand/{docId} {
+      // Anyone may read current hand markers
       allow read: if true;
+
+      // Authenticated clients may create/update with a strict key whitelist
       allow create, update: if request.auth != null
         && request.resource.data.keys().subsetOf([
-             'handNo','dealerSeat','sbSeat','bbSeat','toActSeat',
-             'street','betToMatchCents','commits','lastAggressorSeat',
-             'updatedAt'
-           ]);
+          'handNo',
+          'dealerSeat',
+          'sbSeat',
+          'bbSeat',
+          'toActSeat',
+          'street',
+          'betToMatchCents',
+          'commits',
+          'lastAggressorSeat',
+          'updatedAt'
+        ]);
+
+      // No deletes from clients
       allow delete: if false;
     }
 

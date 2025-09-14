@@ -571,12 +571,31 @@
         let dealer;
         if (currentState && occupied.includes(currentState.dealerSeat)) dealer = next(occupied, currentState.dealerSeat);
         else dealer = occupied[0];
-        const sb = next(occupied, dealer);
-        const bb = next(occupied, sb);
-        const toAct = next(occupied, bb);
+        const sbSeat = next(occupied, dealer);
+        const bbSeat = next(occupied, sbSeat);
+        const toActSeat = next(occupied, bbSeat);
         const handNo = (typeof currentState?.handNo === 'number' ? currentState.handNo : 0) + 1;
-        await setDoc(stateRef, { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct, updatedAt: serverTimestamp() }, { merge: true });
-        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat: sb, bbSeat: bb, toActSeat: toAct });
+        const tableData = tablesData[tableId] || {};
+        const sb = tableData?.blinds?.sbCents || 0;
+        const bb = tableData?.blinds?.bbCents || 0;
+        const commits = {};
+        commits[String(sbSeat)] = sb;
+        commits[String(bbSeat)] = bb;
+        const payload = {
+          handNo,
+          dealerSeat: dealer,
+          sbSeat,
+          bbSeat,
+          toActSeat,
+          street: 'preflop',
+          betToMatchCents: bb,
+          commits,
+          lastAggressorSeat: bbSeat,
+          updatedAt: serverTimestamp(),
+        };
+        if (window.jamlog) window.jamlog.push('hand.start.payload.keys', { keys: Object.keys(payload) });
+        await setDoc(stateRef, payload, { merge: true });
+        if (window.jamlog) window.jamlog.push('hand.start.ok', { handNo, dealerSeat: dealer, sbSeat, bbSeat, toActSeat, street: 'preflop' });
       } catch (err) {
         if (window.jamlog) window.jamlog.push('hand.start.fail', { code: err?.code, message: err?.message });
         alert('Error starting hand.');
