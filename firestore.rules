@@ -1,5 +1,20 @@
 rules_version = '2';
 service cloud.firestore {
+  // Returns a nested map or a default when missing or not a map.
+  function mapOr(m, k, d) {
+    return (k in m && m[k] is map) ? m[k] : d;
+  }
+
+  // Returns a value from a map or a default when the key is missing.
+  function getOr(m, k, d) {
+    return (k in m) ? m[k] : d;
+  }
+
+  // Checks for a two-level deep key like m[k1][k2].
+  function has2(m, k1, k2) {
+    return (k1 in m) && (m[k1] is map) && (k2 in m[k1]);
+  }
+
   match /databases/{database}/documents {
 
     function isAdmin() {
@@ -88,8 +103,10 @@ service cloud.firestore {
         function isCheck(tableId) {
           let seat = resource.data.toActSeat;
           let bet = resource.data.betToMatchCents;
-          let oldCommit = resource.data.commits[seat] ?? 0;
-          let newCommit = request.resource.data.commits[seat] ?? oldCommit;
+          let commits = mapOr(resource.data, 'commits', {});
+          let oldCommit = getOr(commits, seat, 0);
+          let reqCommits = mapOr(request.resource.data, 'commits', {});
+          let newCommit = getOr(reqCommits, seat, oldCommit);
           let delta = newCommit - oldCommit;
           return actorIs(tableId, seat) && bet == oldCommit && delta == 0 &&
                  request.resource.data.diff(resource.data).changedKeys()
@@ -101,8 +118,10 @@ service cloud.firestore {
         function isCall(tableId) {
           let seat = resource.data.toActSeat;
           let bet = resource.data.betToMatchCents;
-          let oldCommit = resource.data.commits[seat] ?? 0;
-          let newCommit = request.resource.data.commits[seat] ?? 0;
+          let commits = mapOr(resource.data, 'commits', {});
+          let oldCommit = getOr(commits, seat, 0);
+          let reqCommits = mapOr(request.resource.data, 'commits', {});
+          let newCommit = getOr(reqCommits, seat, 0);
           let delta = newCommit - oldCommit;
           return actorIs(tableId, seat) && delta == bet - oldCommit && delta >= 0 &&
                  request.resource.data.diff(resource.data).changedKeys()
