@@ -41,6 +41,25 @@ jobs:
       - name: Show Firebase CLI version
         run: npx --yes firebase-tools@14.16.0 --version
 
+      - name: Compile Firestore security rules
+        if: steps.authpick.outputs.method == 'token'
+        run: |
+          npx --yes firebase-tools@14.16.0 deploy \
+            --only firestore:rules \
+            --project "$PROJECT_ID" \
+            --token "${FIREBASE_TOKEN}" \
+            --debug
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+
+      - name: Compile Firestore security rules (SA auth)
+        if: steps.authpick.outputs.method == 'sa'
+        run: |
+          npx --yes firebase-tools@14.16.0 deploy \
+            --only firestore:rules \
+            --project "$PROJECT_ID" \
+            --debug
+
       - name: Deploy Firestore security rules
         if: steps.authpick.outputs.method == 'token'
         run: |
