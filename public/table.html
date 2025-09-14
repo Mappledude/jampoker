@@ -28,7 +28,8 @@
     import { app } from "/firebase-init.js";
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
-      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp, writeBatch, runTransaction, increment
+      doc, onSnapshot, collection, query, orderBy, addDoc, serverTimestamp,
+      writeBatch, runTransaction, increment, getDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
 
@@ -62,6 +63,7 @@
     let seatData = [];
     let unsubHand = null;
     let backfillAttempted = false;
+    let backfillTimer = null;
     let seatCountTimer = null;
     let seatCountDesync = false;
 
@@ -119,23 +121,25 @@
           renderPlayerBoard();
           updateDebug();
           checkSeatCount();
+          if (snap.size === 0 && (tableData?.maxSeats || 0) > 0) {
+            if (!backfillTimer && !backfillAttempted) {
+              backfillTimer = setTimeout(() => {
+                backfillTimer = null;
+                if (seatData.length === 0 && (tableData?.maxSeats || 0) > 0) backfillSeats();
+              }, 1000);
+            }
+          } else if (backfillTimer) {
+            clearTimeout(backfillTimer);
+            backfillTimer = null;
+          }
         }, (err) => {
-          if (window.jamlog) window.jamlog.push('table.seats.sub.error', { code: err?.code });
+          if (window.jamlog) window.jamlog.push('table.seats.sub.error', { code: err?.code, message: err?.message });
         });
-        setTimeout(checkBackfill, 1500);
       }
 
     document.addEventListener('change', (e) => {
       if (e.target.id === 'cp-select') renderPlayerBoard();
     });
-
-    function checkBackfill() {
-      if (backfillAttempted) return;
-      if (!tableData) { setTimeout(checkBackfill, 500); return; }
-      if (seatData.length === 0 && (tableData.maxSeats || 0) > 0) {
-        backfillSeats();
-      }
-    }
 
     async function backfillSeats() {
       backfillAttempted = true;
@@ -143,17 +147,23 @@
       try {
         const batch = writeBatch(db);
         const max = tableData.maxSeats || 0;
+        const checks = [];
         for (let i = 0; i < max; i++) {
           const sref = doc(db, 'tables', tableId, 'seats', String(i));
-          batch.set(sref, {
-            seatIndex: i,
-            occupiedBy: null,
-            displayName: null,
-            sittingOut: false,
-            stackCents: null,
-            updatedAt: serverTimestamp(),
-          }, { merge: false });
+          checks.push(getDoc(sref).then((snap) => {
+            if (!snap.exists()) {
+              batch.set(sref, {
+                seatIndex: i,
+                occupiedBy: null,
+                displayName: null,
+                sittingOut: false,
+                stackCents: null,
+                updatedAt: serverTimestamp(),
+              });
+            }
+          }));
         }
+        await Promise.all(checks);
         await batch.commit();
         if (window.jamlog) window.jamlog.push('table.seats.backfill.ok', { count: max });
       } catch (e) {
@@ -286,7 +296,9 @@
     async function claimSeat(seatIndex) {
       const current = getCurrentPlayer();
       if (!current) { alert('Select a Current Player first.'); return; }
+      if (window.jamlog) window.jamlog.push('seat.tx.start', { seatIndex });
       let stack = 0;
+      let phase = 'seatWrite';
       try {
         await awaitAuthReady();
         await runTransaction(db, async (tx) => {
@@ -319,11 +331,19 @@
           };
           if (seatSnap.exists()) tx.update(seatRef, seatData);
           else tx.set(seatRef, seatData);
+          phase = 'tableUpdate';
           tx.update(tableRef, { activeSeatCount: increment(1) });
         });
-        if (window.jamlog) window.jamlog.push('seat.tx.claim.stack', { seatIndex, stackCents: stack });
+        if (window.jamlog) {
+          window.jamlog.push('seat.tx.ok', { seatIndex });
+          window.jamlog.push('seat.tx.claim.stack', { seatIndex, stackCents: stack });
+        }
       } catch (err) {
-        if (window.jamlog) window.jamlog.push('seat.tx.claim.fail', { code: err?.code });
+        if (window.jamlog) {
+          if (phase === 'tableUpdate') window.jamlog.push('seat.tx.fail.tableUpdate', { code: err?.code });
+          else window.jamlog.push('seat.tx.fail.seatWrite', { code: err?.code });
+          window.jamlog.push('seat.tx.fail', { seatIndex, code: err?.code, message: err?.message });
+        }
         alert('Seat taken or no permission.');
       }
     }
@@ -331,12 +351,15 @@
     async function leaveSeat(seatIndex) {
       const current = getCurrentPlayer();
       if (!current) return;
+      if (window.jamlog) window.jamlog.push('seat.tx.start', { seatIndex });
+      let phase = 'seatWrite';
       try {
         await awaitAuthReady();
         await runTransaction(db, async (tx) => {
           const tableRef = doc(db, 'tables', tableId);
           const seatRef = doc(db, 'tables', tableId, 'seats', String(seatIndex));
           const seatSnap = await tx.get(seatRef);
+          if (!seatSnap.exists()) throw new Error('Seat missing');
           if (seatSnap.data()?.occupiedBy !== current.id) throw new Error('Not your seat');
           tx.update(seatRef, {
             occupiedBy: null,
@@ -345,11 +368,19 @@
             stackCents: null,
             updatedAt: serverTimestamp(),
           });
+          phase = 'tableUpdate';
           tx.update(tableRef, { activeSeatCount: increment(-1) });
         });
-        if (window.jamlog) window.jamlog.push('seat.tx.leave.stackCleared', { seatIndex });
+        if (window.jamlog) {
+          window.jamlog.push('seat.tx.ok', { seatIndex });
+          window.jamlog.push('seat.tx.leave.stackCleared', { seatIndex });
+        }
       } catch (err) {
-        if (window.jamlog) window.jamlog.push('seat.tx.leave.fail', { code: err?.code });
+        if (window.jamlog) {
+          if (phase === 'tableUpdate') window.jamlog.push('seat.tx.fail.tableUpdate', { code: err?.code });
+          else window.jamlog.push('seat.tx.fail.seatWrite', { code: err?.code });
+          window.jamlog.push('seat.tx.fail', { seatIndex, code: err?.code, message: err?.message });
+        }
       }
     }
 
