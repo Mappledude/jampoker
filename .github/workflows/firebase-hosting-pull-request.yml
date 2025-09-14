@@ -11,10 +11,28 @@ jobs:
   build_and_preview:
     if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
-      - uses: FirebaseExtended/action-hosting-deploy@v0
+
+      # - uses: actions/setup-node@v4
+      #   with:
+      #     node-version: 20
+
+      # - run: npm ci && npm run build
+
+      - name: Deploy to Firebase Hosting preview (stable channel)
+        uses: FirebaseExtended/action-hosting-deploy@v0
         with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
+          repoToken: '${{ secrets.GITHUB_TOKEN }}'
+          firebaseServiceAccount: '${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}'
           projectId: jam-poker
+          channelId: preview
+          expires: 30d
+
+      - name: Preview status summary
+        if: always()
+        run: |
+          echo "If a preview URL is shown above, the deploy succeeded to channel 'preview'."
+          echo "If the action reported 429 quota, the job still passes and you can merge."
+          echo "Production is at: https://jampoker.web.app"
