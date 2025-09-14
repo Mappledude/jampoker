@@ -19,6 +19,7 @@
 - **brief-11c.hotfix-5** complete — admin create table + seat seeding + dev rules
 - **brief-11d** finalized — Table UI locked to variant 1
 - **brief-11e** complete — seat subscription + safe backfill + derived/active guard
+- **brief-12a** complete — auto-stack on seat claim + stack display
 
 ## Open Issues / Next Steps
 - Verify **Board UI** renders in /table.html after closing preflop.

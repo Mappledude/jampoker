@@ -10,6 +10,8 @@ export const db = getFirestore(app);
 export const dollars = (cents) =>
   `$${(cents/100).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
+export const formatCents = (cents) => `$${(cents / 100).toFixed(2)}`;
+
 export const parseDollarsToCents = (input) => {
   const clean = String(input).replace(/[^0-9.]/g, "");
   if (!clean) return null;
