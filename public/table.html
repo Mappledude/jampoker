@@ -136,6 +136,34 @@
         };
       };
 
+      const JAMLOG_THROTTLE_MS = 500;
+      const JAMLOG_THROTTLE_KEYS = ['toActSeat', 'street', 'handNo', 'toMatch', 'myCommit'];
+      const jamlogThrottleState = {};
+      const jamlogThrottleTargets = new Set(['turn.snapshot', 'action.guard']);
+      const jamlogPushThrottled = (event, payload, meta = {}) => {
+        if (!window.jamlog || typeof window.jamlog.push !== 'function') return;
+        if (!jamlogThrottleTargets.has(event)) {
+          window.jamlog.push(event, payload);
+          return;
+        }
+        const now = Date.now();
+        const state = jamlogThrottleState[event] || { lastAt: 0, lastSignature: null };
+        const relevant = {};
+        JAMLOG_THROTTLE_KEYS.forEach((key) => {
+          const value = meta && Object.prototype.hasOwnProperty.call(meta, key) ? meta[key] : undefined;
+          relevant[key] = value === undefined ? null : value;
+        });
+        const signature = JSON.stringify(relevant);
+        const first = state.lastSignature === null;
+        const changed = signature !== state.lastSignature;
+        const elapsed = now - state.lastAt;
+        const reasonValue = typeof meta.reason === 'string' ? meta.reason : null;
+        const reasonNonOk = reasonValue !== null && reasonValue !== 'ok';
+        if (!(first || elapsed >= JAMLOG_THROTTLE_MS || changed || reasonNonOk)) return;
+        jamlogThrottleState[event] = { lastAt: now, lastSignature: signature };
+        window.jamlog.push(event, payload);
+      };
+
     if (window.jamlog) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'TABLE' });
     }
@@ -782,10 +810,12 @@
         if (!current || mySeatIndex == null) { boardEl.style.display = 'none'; return; }
         const snapshotForLog = buildHandStatePayload(handState);
         const derived = deriveHandContext(snapshotForLog);
-        const toMatch = typeof derived.toMatch === 'number' ? derived.toMatch : 0;
-        const myCommit = typeof derived.myCommit === 'number' ? derived.myCommit : 0;
+        const derivedToMatch = typeof derived.toMatch === 'number' ? derived.toMatch : null;
+        const derivedMyCommit = typeof derived.myCommit === 'number' ? derived.myCommit : null;
+        const toMatch = derivedToMatch ?? 0;
+        const myCommit = derivedMyCommit ?? 0;
         const owe = Math.max(0, toMatch - myCommit);
-        if (window.jamlog) window.jamlog.push('turn.snapshot', {
+        const snapshotPayload = {
           ...snapshotForLog,
           commits: { ...snapshotForLog.commits },
           myUid: current?.id || null,
@@ -794,6 +824,13 @@
           seats: seatData.map((s, i) => ({ i, seat: toSeatNumber(s?.seatIndex ?? i), uid: s?.occupiedBy || null })),
           street: derived.street ?? snapshotForLog.street ?? null,
           handNo: derived.handNo ?? snapshotForLog.handNo ?? null,
+        };
+        jamlogPushThrottled('turn.snapshot', snapshotPayload, {
+          toActSeat: snapshotForLog.toActSeat ?? null,
+          street: derived.street ?? snapshotForLog.street ?? null,
+          handNo: derived.handNo ?? snapshotForLog.handNo ?? null,
+          toMatch: derivedToMatch,
+          myCommit: derivedMyCommit,
         });
         boardEl.style.display = 'block';
         boardEl.innerHTML = `
@@ -824,7 +861,7 @@
         if (pending) { reason = 'pending'; enable = false; }
         const tooltip = reason === 'no-hand' ? 'Start Hand first' : 'Waiting for your turn';
         [checkBtn, callBtn, foldBtn].forEach(b => { b.disabled = !enable; if (!enable) b.title = tooltip; else b.removeAttribute('title'); });
-        if (window.jamlog) window.jamlog.push('action.guard', {
+        const guardPayload = {
           reason,
           myUid: current?.id || null,
           mySeat: mySeatIndex,
@@ -834,6 +871,14 @@
           owe,
           street: derived.street ?? snapshotForLog.street ?? null,
           handNo: derived.handNo ?? snapshotForLog.handNo ?? null,
+        };
+        jamlogPushThrottled('action.guard', guardPayload, {
+          reason,
+          toActSeat: snapshotForLog.toActSeat ?? null,
+          street: derived.street ?? snapshotForLog.street ?? null,
+          handNo: derived.handNo ?? snapshotForLog.handNo ?? null,
+          toMatch: derivedToMatch,
+          myCommit: derivedMyCommit,
         });
         leaveBtn.addEventListener('click', () => leaveSeat(mySeatIndex));
         if (enable) {
