@@ -1,90 +1,18 @@
-name: firebase-hosting-preview
+name: Firebase Hosting Preview (stub)
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened]
-
-concurrency:
-  group: preview-${{ github.event.pull_request.number }}
-  cancel-in-progress: true
-
-env:
-  PROJECT_ID: jam-poker
+    branches:
+      - main
+  workflow_dispatch:
 
 jobs:
-  # Preview deployments are currently disabled. Remove the comments below to
-  # re-enable the job using the FIREBASE_SERVICE_ACCOUNT secret.
-  # hosting-preview:
-  #   if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-  #   runs-on: ubuntu-latest
-  #   permissions:
-  #     contents: read
-  #     id-token: write
-  #   steps:
-  #     - uses: actions/checkout@v4
-  #
-  #     - name: Setup Node (cache: root + functions)
-  #       if: ${{ hashFiles('package-lock.json') != '' && hashFiles('functions/package-lock.json') != '' }}
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '18'
-  #         cache: 'npm'
-  #         cache-dependency-path: |
-  #           package-lock.json
-  #           functions/package-lock.json
-
-  #     - name: Setup Node (cache: root only)
-  #       if: ${{ hashFiles('package-lock.json') != '' && hashFiles('functions/package-lock.json') == '' }}
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '18'
-  #         cache: 'npm'
-  #         cache-dependency-path: package-lock.json
-
-  #     - name: Setup Node (cache: functions only)
-  #       if: ${{ hashFiles('package-lock.json') == '' && hashFiles('functions/package-lock.json') != '' }}
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '18'
-  #         cache: 'npm'
-  #         cache-dependency-path: functions/package-lock.json
-
-  #     - name: Setup Node (no cache)
-  #       if: ${{ hashFiles('package-lock.json') == '' && hashFiles('functions/package-lock.json') == '' }}
-  #       uses: actions/setup-node@v4
-  #       with:
-  #         node-version: '18'
-
-  #     - name: Install deps (root)
-  #       run: |
-  #         if [ -f package-lock.json ]; then
-  #           npm ci
-  #         else
-  #           npm install
-  #         fi
-
-  #     - name: Install deps (functions)
-  #       run: |
-  #         if [ -f functions/package-lock.json ]; then
-  #           npm ci --prefix functions
-  #         else
-  #           npm install --prefix functions
-  #         fi
-  #
-  #     - name: Install Firebase CLI
-  #       run: npm install -g firebase-tools
-  #
-  #     - name: Authenticate to Google Cloud
-  #       uses: google-github-actions/auth@v2
-  #       with:
-  #         projectId: jam-poker
-  #         credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
-  #
-  #     - name: Deploy preview channel
-  #       run: firebase hosting:channel:deploy pr-${{ github.event.number }} --project "$PROJECT_ID" --json
-
-  skip-preview:
-    if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}
+  noop:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "Skipping Hosting Preview: PR from fork (no secrets)."
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Preview stub
+        run: |
+          echo "Preview workflow temporarily stubbed to fix YAML errors."
+          echo "Real deploys still handled by deploy-on-merge."
