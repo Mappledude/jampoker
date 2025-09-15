@@ -81,7 +81,7 @@
         return null;
       };
 
-      const buildHandStatePayload = (state) => {
+      const buildHandStatePayload = (state, seatsSnapshot = []) => {
         const safe = state || {};
         const rawCommits = safe.commits && typeof safe.commits === 'object' ? safe.commits : null;
         const commitKeys = rawCommits ? Object.keys(rawCommits).sort((a, b) => Number(a) - Number(b)) : [];
@@ -95,6 +95,35 @@
         const betToMatchCents = toCents(safe.betToMatchCents);
         let potCents = toCents(safe.potCents);
         if (potCents === null && commitValues.length > 0) potCents = potFromCommits;
+        const seatsArray = Array.isArray(seatsSnapshot) ? seatsSnapshot : [];
+        const seatIndexSet = new Set();
+        seatsArray.forEach((seat, idx) => {
+          const seatIndex = toSeatNumber(seat?.seatIndex ?? seat?.seat ?? seat?.i ?? idx);
+          if (seatIndex !== null && seatIndex >= 0) seatIndexSet.add(seatIndex);
+        });
+        commitKeys.forEach((key) => {
+          const seatIndex = toSeatNumber(key);
+          if (seatIndex !== null && seatIndex >= 0) seatIndexSet.add(seatIndex);
+        });
+        const seatIndexList = Array.from(seatIndexSet.values()).sort((a, b) => a - b);
+        const stacks = {};
+        const seatUids = {};
+        seatIndexList.forEach((idx) => {
+          const key = String(idx);
+          stacks[key] = null;
+          seatUids[key] = null;
+        });
+        seatsArray.forEach((seat, idx) => {
+          const seatIndex = toSeatNumber(seat?.seatIndex ?? seat?.seat ?? seat?.i ?? idx);
+          if (seatIndex === null || seatIndex < 0) return;
+          const key = String(seatIndex);
+          const stackValue = toCents(seat?.stackCents ?? seat?.stack ?? null);
+          stacks[key] = stackValue !== null ? stackValue : null;
+          const uidValue = typeof seat?.occupiedBy === 'string' ? seat.occupiedBy
+            : typeof seat?.uid === 'string' ? seat.uid
+            : null;
+          seatUids[key] = uidValue ?? null;
+        });
         return {
           handNo: toHandNumber(safe.handNo ?? null),
           street: safe.street ?? null,
@@ -102,6 +131,8 @@
           betToMatchCents: betToMatchCents ?? null,
           potCents: potCents ?? null,
           commits: commitValues.length > 0 ? commits : {},
+          stacks,
+          seatUids,
           lastAggressorSeat: toSeatNumber(safe.lastAggressorSeat ?? null),
           lastRaiseSizeCents: toCents(safe.lastRaiseSizeCents ?? null),
           lastRaiseToCents: toCents(safe.lastRaiseToCents ?? null),
@@ -387,11 +418,16 @@
     const handRef = tableId ? doc(db, handDocPath(tableId)) : null;
 
     function pushHandStateChanged(state) {
-      const payload = buildHandStatePayload(state);
+      const payload = buildHandStatePayload(state, seatData);
       const derived = deriveHandContext(payload);
       if (window.jamlog) {
         window.jamlog.hand = {
-          snapshot: { ...payload, commits: { ...payload.commits } },
+          snapshot: {
+            ...payload,
+            commits: { ...payload.commits },
+            stacks: { ...(payload.stacks || {}) },
+            seatUids: { ...(payload.seatUids || {}) },
+          },
           derived: { ...derived },
         };
       }
@@ -845,7 +881,7 @@
         const current = getCurrentPlayer();
         mySeatIndex = seatData.find(s => s.occupiedBy === current?.id)?.seatIndex ?? null;
         if (!current || mySeatIndex == null) { boardEl.style.display = 'none'; return; }
-        const snapshotForLog = buildHandStatePayload(handState);
+        const snapshotForLog = buildHandStatePayload(handState, seatData);
         const derived = deriveHandContext(snapshotForLog);
         const derivedToMatch = typeof derived.toMatch === 'number' ? derived.toMatch : null;
         const derivedMyCommit = typeof derived.myCommit === 'number' ? derived.myCommit : null;
@@ -855,6 +891,8 @@
         const snapshotPayload = {
           ...snapshotForLog,
           commits: { ...snapshotForLog.commits },
+          stacks: { ...(snapshotForLog.stacks || {}) },
+          seatUids: { ...(snapshotForLog.seatUids || {}) },
           myUid: current?.id || null,
           mySeat: mySeatIndex,
           toActSeat: snapshotForLog.toActSeat ?? null,
