@@ -12,6 +12,13 @@ import {
 } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
+function pushJamlog(type: string, ctx: Record<string, unknown>) {
+  const jamlog = (globalThis as any)?.jamlog;
+  if (jamlog && typeof jamlog.push === 'function') {
+    jamlog.push(type, ctx);
+  }
+}
+
 export function startActionWorker(tableId: string) {
   const db = getFirestore();
   const functions = getFunctions();
@@ -32,8 +39,10 @@ export function startActionWorker(tableId: string) {
 
         try {
           console.debug('worker.apply.start', { tableId, actionId: docSnap.id });
+          pushJamlog('worker.apply.start', { tableId, actionId: docSnap.id });
           await takeActionTX({ tableId, actionId: docSnap.id });
           console.debug('worker.apply.ok', { tableId, actionId: docSnap.id });
+          pushJamlog('worker.apply.ok', { tableId, actionId: docSnap.id });
           await updateDoc(actionRef, { applied: true, appliedAt: serverTimestamp() });
         } catch (err: any) {
           console.error('worker.apply.fail', {
@@ -41,6 +50,12 @@ export function startActionWorker(tableId: string) {
             actionId: docSnap.id,
             code: err?.code,
             message: err?.message,
+          });
+          pushJamlog('worker.apply.fail', {
+            tableId,
+            actionId: docSnap.id,
+            code: err?.code ?? null,
+            message: err?.message ?? String(err),
           });
           await updateDoc(actionRef, {
             applied: true,

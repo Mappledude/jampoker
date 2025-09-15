@@ -277,8 +277,47 @@
     let backfillTimer = null;
     let seatCountTimer = null;
     let seatCountDesync = false;
+    let lastHandStateLogKey = null;
     const tableRef = tableId ? doc(db, 'tables', tableId) : null;
     const handRef = tableId ? doc(db, handDocPath(tableId)) : null;
+
+    function buildHandStateChangePayload(state) {
+      const snapshot = buildHandLogSnapshot(state);
+      const commits = snapshot.commits && Object.keys(snapshot.commits).length ? snapshot.commits : null;
+      const currentPlayer = getCurrentPlayer();
+      const seatEntry = currentPlayer ? seatData.find((s) => s.occupiedBy === currentPlayer.id) : null;
+      const mySeat = toSeatNumber(seatEntry?.seatIndex ?? null);
+      const commitValue = commits && mySeat !== null ? commits[String(mySeat)] : null;
+      const myCommit = toCents(commitValue);
+      return {
+        handNo: snapshot.handNo ?? null,
+        street: snapshot.street ?? null,
+        toActSeat: snapshot.toActSeat ?? null,
+        betToMatchCents: snapshot.betToMatchCents ?? null,
+        potCents: snapshot.potCents ?? null,
+        commits,
+        lastAggressorSeat: toSeatNumber(state?.lastAggressorSeat ?? null),
+        lastRaiseSizeCents: toCents(state?.lastRaiseSizeCents ?? null),
+        lastRaiseToCents: toCents(state?.lastRaiseToCents ?? null),
+        derived: {
+          toMatch: snapshot.betToMatchCents ?? null,
+          myCommit: myCommit ?? null,
+          potCents: snapshot.potCents ?? null,
+          mySeat: mySeat ?? null,
+          toActSeat: snapshot.toActSeat ?? null,
+          street: snapshot.street ?? null,
+          handNo: snapshot.handNo ?? null,
+        },
+      };
+    }
+
+    function pushHandStateChanged(state) {
+      const payload = buildHandStateChangePayload(state);
+      const key = JSON.stringify(payload);
+      if (lastHandStateLogKey === key) return;
+      lastHandStateLogKey = key;
+      if (window.jamlog) window.jamlog.push('hand.state.changed', payload);
+    }
 
     function subscribeHandState(tableId, onChange) {
       const path = handDocPath(tableId);
@@ -304,6 +343,7 @@
             handState.sbSeat = toSeatNumber(handState?.sbSeat);
             handState.bbSeat = toSeatNumber(handState?.bbSeat);
             handState.dealerSeat = toSeatNumber(handState?.dealerSeat);
+            pushHandStateChanged(handState);
             noHandBanner.style.display = 'none';
             if (pending) {
               pending = null;
@@ -321,6 +361,7 @@
             }
           } else {
             handState = null;
+            pushHandStateChanged(null);
             if (pending) {
               pending = null;
               if (pendingTimer) clearTimeout(pendingTimer);
@@ -824,7 +865,6 @@
       if (type === 'fold') foldedSeats.add(mySeatIndex);
       try {
         await enqueueAction(payload);
-        if (window.jamlog) window.jamlog.push('ui.action.enqueued', { type, seat: mySeatIndex });
       } catch (e) {
         pending = null;
         if (pendingTimer) clearTimeout(pendingTimer);
@@ -836,7 +876,7 @@
       await awaitAuthReady();
       const createdByUid = auth.currentUser?.uid || 'anon';
       const actorUid = seatData[mySeatIndex]?.occupiedBy || null;
-      await addDoc(collection(db, `tables/${tableId}/actions`), {
+      const docRef = await addDoc(collection(db, `tables/${tableId}/actions`), {
         handNo: handState?.handNo || 0,
         seat: mySeatIndex,
         ...action,
@@ -846,6 +886,23 @@
         clientTs: Date.now(),
         applied: false,
       });
+      if (window.jamlog) {
+        const amount = typeof action?.amountCents === 'number' && Number.isFinite(action.amountCents)
+          ? action.amountCents
+          : null;
+        const handNo = typeof handState?.handNo === 'number' && Number.isFinite(handState.handNo)
+          ? handState.handNo
+          : null;
+        window.jamlog.push('ui.action.enqueued', {
+          id: docRef.id,
+          type: action?.type || null,
+          seat: mySeatIndex ?? null,
+          handNo,
+          amountCents: amount,
+          actorUid,
+        });
+      }
+      return docRef;
     }
 
     function updateDebug() {
