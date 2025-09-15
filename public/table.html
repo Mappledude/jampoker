@@ -49,6 +49,7 @@
   <script type="module">
     import { app } from "/firebase-init.js";
     import { startActionWorker } from "/adminWorker.js";
+    import { initAdminHud } from "/js/adminHud.js";
     import { startHand } from "/startHand.js";
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
@@ -189,6 +190,8 @@
     const exportStatus = document.getElementById('debug-export-status');
     const exportRawToggle = document.getElementById('debug-export-raw');
     let exportGeneration = 0;
+    let tableHud = null;
+    let tableWorkerUnsub = null;
 
     const closeExportModal = () => {
       if (exportModal) exportModal.style.display = 'none';
@@ -298,8 +301,39 @@
       const isAdmin = !!(createdByUid && createdByUid === u.uid);
       if (isAdmin) {
         document.body.classList.add('is-table-admin');
-        if (window.jamlog) window.jamlog.push('worker.attach', { tableId, isAdmin: true });
-        startActionWorker(tableId);
+        const tableSnapData = tSnap.exists() ? (tSnap.data() || null) : null;
+        const tableName = tableSnapData && typeof tableSnapData.name === 'string' ? tableSnapData.name : null;
+        tableHud = initAdminHud({
+          page: 'TABLE',
+          jamlog: window.jamlog,
+          startWorker: (tid) => {
+            if (!tid || tid !== tableId) return false;
+            if (tableWorkerUnsub) return false;
+            tableWorkerUnsub = startActionWorker(tid);
+            return true;
+          },
+          stopWorker: (tid) => {
+            if (!tid || tid !== tableId) return false;
+            if (!tableWorkerUnsub) return false;
+            tableWorkerUnsub();
+            tableWorkerUnsub = null;
+            return true;
+          },
+          getWorkerState: (tid) => !!tableWorkerUnsub && tid === tableId,
+        });
+        tableHud.setContext({ tableId, isOwner: true, tableName, autoStart: true });
+        window.addEventListener('beforeunload', () => {
+          try {
+            tableHud?.destroy?.();
+          } catch (err) {
+            console.warn('tableHud.destroy failed', err);
+          }
+          tableHud = null;
+          if (tableWorkerUnsub) {
+            tableWorkerUnsub();
+            tableWorkerUnsub = null;
+          }
+        }, { once: true });
         try {
           const { initAdvanceStreet } = await import('/js/advanceStreet.js');
           initAdvanceStreet({ tableId });
