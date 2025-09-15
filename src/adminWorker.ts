@@ -1,6 +1,5 @@
 import {
   getFirestore,
-  doc,
   collection,
   query,
   where,
@@ -8,7 +7,6 @@ import {
   limit,
   onSnapshot,
   serverTimestamp,
-  getDoc,
   updateDoc,
 } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
@@ -29,52 +27,20 @@ export function startActionWorker(tableId: string) {
     q,
     async (snap) => {
       for (const docSnap of snap.docs) {
-        const a = docSnap.data() as any;
         const actionRef = docSnap.ref;
-        const hsRef = doc(db, `tables/${tableId}/handState/current`);
-        const hsSnap = await getDoc(hsRef);
-        const hs = hsSnap.data() as any;
-        if (!hs || hs.toActSeat !== a.seat) {
-          await updateDoc(actionRef, {
-            applied: true,
-            invalid: true,
-            reason: 'not-your-turn',
-            appliedAt: serverTimestamp(),
-          });
-          continue;
-        }
-        const seatUid = hs?.seats?.[a.seat]?.uid;
-        if (a.actorUid && seatUid && a.actorUid !== seatUid) {
-          console.warn('worker.apply.warn', {
-            reason: 'seat-mismatch',
-            actionId: docSnap.id,
-            seat: a.seat,
-            actorUid: a.actorUid,
-            seatUid,
-          });
-        }
         try {
-          await takeActionTX({
-            tableId,
-            action: {
-              handNo: a.handNo,
-              seat: a.seat,
-              type: a.type,
-              amountCents: a.amountCents ?? null,
-              actorUid: a.actorUid,
-              createdByUid: a.createdByUid,
-            },
-          });
+          await takeActionTX({ tableId, actionId: docSnap.id });
           await updateDoc(actionRef, {
             applied: true,
             appliedAt: serverTimestamp(),
           });
-        } catch (err) {
+        } catch (err: any) {
           console.error('worker.apply.error', err);
           await updateDoc(actionRef, {
             applied: true,
             invalid: true,
-            reason: 'server-error',
+            reason: err?.message || 'server-error',
+            error: err?.code || null,
             appliedAt: serverTimestamp(),
           });
         }

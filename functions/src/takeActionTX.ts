@@ -58,29 +58,40 @@ function advanceStreet(hand: any, seats: any[]) {
 }
 
 export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
-  const { tableId, kind, expectedHandNo, expectedToActSeat, expectedUpdatedAt } = request.data || {};
-  if (!tableId || !kind) throw new HttpsError('invalid-argument', 'missing-fields');
+  const { tableId, actionId } = request.data || {};
+  if (!tableId || !actionId) throw new HttpsError('invalid-argument', 'missing-fields');
+
   const handRef = db.doc(`tables/${tableId}/handState/current`);
   const tableRef = db.doc(`tables/${tableId}`);
+  const actionRef = db.doc(`tables/${tableId}/actions/${actionId}`);
 
   await db.runTransaction(async (tx) => {
-    const [handSnap, tableSnap] = await Promise.all([tx.get(handRef), tx.get(tableRef)]);
+    const [actionSnap, handSnap, tableSnap] = await Promise.all([
+      tx.get(actionRef),
+      tx.get(handRef),
+      tx.get(tableRef),
+    ]);
+
+    const action = actionSnap.data();
     const hand = handSnap.data();
     const table = tableSnap.data();
-    if (!hand || !table) throw new HttpsError('failed-precondition', 'hand-or-table-missing');
+    if (!action || !hand || !table)
+      throw new HttpsError('failed-precondition', 'missing-docs');
+    if (action.applied)
+      throw new HttpsError('failed-precondition', 'already-applied');
 
-    if (hand.handNo !== expectedHandNo) throw new HttpsError('aborted', 'stale-handno');
-    if (
-      expectedUpdatedAt &&
-      +hand.updatedAt?.toMillis?.() !== +expectedUpdatedAt?.toMillis?.()
-    ) {
-      throw new HttpsError('aborted', 'stale-hand');
-    }
-    const mySeat = table.seats.findIndex((s: any) => s?.uid === request.auth?.uid);
-    if (mySeat < 0) throw new HttpsError('permission-denied', 'not-seated');
-    if (hand.toActSeat !== mySeat || expectedToActSeat !== mySeat) {
+    const mySeat = action.seat;
+    if (hand.handNo !== action.handNo)
+      throw new HttpsError('aborted', 'stale-handno');
+    if (hand.toActSeat !== mySeat)
       throw new HttpsError('failed-precondition', 'not-your-turn');
+
+    const seatUid = table.seats?.[mySeat]?.uid;
+    if (action.actorUid && seatUid && action.actorUid !== seatUid) {
+      throw new HttpsError('failed-precondition', 'seat-mismatch');
     }
+
+    const kind = action.type;
 
     const commits: Record<string, number> = { ...(hand.commits ?? {}) };
     const key = String(mySeat);
