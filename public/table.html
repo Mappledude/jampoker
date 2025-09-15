@@ -15,7 +15,6 @@
       <button id="chat-toggle" class="toolbar-btn" aria-pressed="false" style="margin-left:auto;margin-right:8px;">Chat</button>
       <span id="debug-chip" class="small" style="cursor:pointer;padding:4px 8px;border:1px solid #334155;border-radius:8px;">Debug: OFF</span>
     </nav>
-    <button id="btn-next-street" data-admin-only style="display:none">Next Street (Admin)</button>
     <div id="you"></div>
     <div id="error" class="card" style="display:none;"></div>
     <div id="table-info" class="card" style="margin-top:16px;"></div>
@@ -88,8 +87,17 @@
       const createdByUid = tSnap.exists() ? (tSnap.data()?.createdByUid || null) : null;
       const isAdmin = !!(createdByUid && createdByUid === u.uid);
       if (isAdmin) {
+        document.body.classList.add('is-table-admin');
         if (window.jamlog) window.jamlog.push('worker.attach', { tableId, isAdmin: true });
         startActionWorker(tableId);
+        try {
+          const { initAdvanceStreet } = await import('/js/advanceStreet.js');
+          initAdvanceStreet({ tableId });
+        } catch (err) {
+          console.error('Failed to load advance street controls', err);
+          logEvent('ui.advanceStreet.load.fail', { tableId, message: err?.message });
+          if (window.jamlog) window.jamlog.push('ui.advanceStreet.load.fail', { tableId, message: err?.message });
+        }
       } else {
         if (window.jamlog) window.jamlog.push('worker.skip', { tableId, isAdmin: false });
       }
@@ -578,7 +586,19 @@
           handNo: handState?.handNo || null,
         });
         boardEl.style.display = 'block';
-        boardEl.innerHTML = '<div style="display:flex; gap:8px; justify-content:center;"><button id="btn-check" class="action-btn" data-action="check">Check</button><button id="btn-call" class="action-btn" data-action="call">Call</button><button id="btn-fold" class="action-btn" data-action="fold">Fold</button></div><div style="display:flex; justify-content:center; margin-top:8px;"><button id="btn-leave-seat">Leave seat</button></div>';
+        boardEl.innerHTML = `
+          <div class="player-board__actions" style="display:flex; gap:8px; justify-content:center; flex-wrap:wrap;">
+            <button id="btn-check" class="action-btn" data-action="check" type="button">Check</button>
+            <button id="btn-call" class="action-btn" data-action="call" type="button">Call</button>
+            <button id="btn-fold" class="action-btn" data-action="fold" type="button">Fold</button>
+          </div>
+          <div id="admin-action-row" class="player-board__admin" data-admin-only>
+            <button id="btn-next-street" class="action-btn small" type="button">Next street</button>
+          </div>
+          <div style="display:flex; justify-content:center; margin-top:8px;">
+            <button id="btn-leave-seat" type="button">Leave seat</button>
+          </div>
+        `;
         const checkBtn = document.getElementById('btn-check');
         const callBtn = document.getElementById('btn-call');
         const foldBtn = document.getElementById('btn-fold');
@@ -680,38 +700,6 @@
       const pos = handData?.positions || {};
       const folded = Object.keys(handData?.folded || {}).join(',');
       debugBox.textContent = `id=${tableId}\ncurrentHandId=${tableData?.currentHandId ?? 'null'}\nnextDealerId=${tableData?.nextDealerId ?? 'null'}\nnextDealerName=${tableData?.nextDealerName ?? 'null'}\nnextVariantId=${tableData?.nextVariantId ?? 'null'}\npositions=${pos.dealerSeatNum ?? 'null'},${pos.sbSeatNum ?? 'null'},${pos.bbSeatNum ?? 'null'}\nstage=${handData?.stage ?? 'null'}\nactorSeatNum=${handData?.actorSeatNum ?? 'null'}\nlastAggressorSeatNum=${handData?.lastAggressorSeatNum ?? 'null'}\nroundStartSeatNum=${handData?.roundStartSeatNum ?? 'null'}\ntoCallCents=${handData?.toCallCents ?? 'null'}\nminRaiseCents=${handData?.minRaiseCents ?? 'null'}\ndeckIndex=${handData?.deckIndex ?? 'null'}\nboard=${JSON.stringify(handData?.board || [])}\nfolded=${folded}\nactiveSeatCount=${seatData.filter(s => s.active).length}`;
-    }
-  </script>
-  <script type="module">
-    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
-    import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
-    import { auth, awaitAuthReady } from "/auth.js";
-
-    const params = new URLSearchParams(location.search);
-    const tableId = params.get('id');
-    const db = getFirestore();
-    const fns = getFunctions();
-
-    await awaitAuthReady();
-    const uid = auth.currentUser?.uid || null;
-
-    if (tableId && uid) {
-      const tSnap = await getDoc(doc(db, `tables/${tableId}`));
-      const isAdmin = tSnap.exists() && tSnap.data()?.createdByUid === uid;
-      const btn = document.getElementById('btn-next-street');
-      if (isAdmin && btn) {
-        btn.style.display = '';
-        btn.addEventListener('click', async () => {
-          try {
-            await httpsCallable(fns, 'forceAdvanceStreet')({ tableId });
-            if (window.jamlog) window.jamlog.push('admin.forceNextStreet.ok');
-          } catch (e) {
-            console.error(e);
-            if (window.jamlog) window.jamlog.push('admin.forceNextStreet.fail', { message: String(e?.message || e) });
-            alert('Failed to advance street');
-          }
-        });
-      }
     }
   </script>
 </body>
