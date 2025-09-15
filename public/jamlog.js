@@ -89,6 +89,38 @@
     return base + street;
   }
 
+  function normalizeStacksMap(raw){
+    if (!raw || typeof raw !== 'object') return null;
+    const out = {};
+    Object.entries(raw).forEach(([key, value]) => {
+      const idx = toSeatNumber(key);
+      if (idx === null || idx < 0) return;
+      if (value === undefined) {
+        out[String(idx)] = null;
+        return;
+      }
+      const cents = toNumber(value);
+      out[String(idx)] = cents !== null ? cents : null;
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
+  function normalizeWalletsMap(raw){
+    if (!raw || typeof raw !== 'object') return null;
+    const out = {};
+    Object.keys(raw).forEach((key) => {
+      if (!key) return;
+      const value = raw[key];
+      if (value === undefined) {
+        out[key] = null;
+        return;
+      }
+      const cents = toNumber(value);
+      out[key] = cents !== null ? cents : null;
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
   function sanitizeContext(ctx){
     if (ctx === undefined) return {};
     if (ctx === null) return null;
@@ -148,6 +180,8 @@
     const potBankedRaw = toNumber(candidate.potCents ?? ctx.potCents ?? null);
     const potBankedCents = typeof potBankedRaw === 'number' && Number.isFinite(potBankedRaw) ? potBankedRaw : 0;
     const streetPotCents = sumCommitValues(commits);
+    const stacks = normalizeStacksMap(candidate.stacks ?? ctx.stacks ?? null);
+    const wallets = normalizeWalletsMap(candidate.wallets ?? ctx.wallets ?? null);
     const snapshot = {
       handNo: candidate.handNo ?? ctx.handNo ?? null,
       street: candidate.street ?? ctx.street ?? null,
@@ -158,13 +192,18 @@
       potDisplayCents: potBankedCents + streetPotCents,
       streetPotCents,
       commits,
+      stacks,
+      wallets,
     };
+    const hasStacks = stacks && Object.keys(stacks).length > 0;
+    const hasWallets = wallets && Object.keys(wallets).length > 0;
+    const hasCommits = snapshot.commits && Object.keys(snapshot.commits).length > 0;
     const hasData = snapshot.handNo !== null || snapshot.street !== null || snapshot.toActSeat !== null ||
-      snapshot.betToMatchCents !== null || snapshot.potCents !== null || (snapshot.commits && Object.keys(snapshot.commits).length > 0);
+      snapshot.betToMatchCents !== null || snapshot.potCents !== null || hasCommits || hasStacks || hasWallets;
     return hasData ? snapshot : null;
   }
 
-  function diffCommits(prev, next){
+  function diffNumberMap(prev, next){
     const changes = {};
     const keys = new Set([
       ...Object.keys(prev || {}),
@@ -180,6 +219,10 @@
       }
     });
     return { changed, changes };
+  }
+
+  function diffCommits(prev, next){
+    return diffNumberMap(prev, next);
   }
 
   function diffSnapshots(prev, next){
@@ -200,6 +243,16 @@
     if (commitDiff.changed) {
       changed = true;
       details.commits = commitDiff.changes;
+    }
+    const stackDiff = diffNumberMap(prev.stacks, next.stacks);
+    if (stackDiff.changed) {
+      changed = true;
+      details.stacks = stackDiff.changes;
+    }
+    const walletDiff = diffNumberMap(prev.wallets, next.wallets);
+    if (walletDiff.changed) {
+      changed = true;
+      details.wallets = walletDiff.changes;
     }
     return { changed, details };
   }
@@ -491,15 +544,22 @@
     return null;
   }
 
-  function buildHandLine(tableId, data){
+  function buildHandLine(tableId, data, extras = {}){
+    const stacksExtra = extras.stacks && typeof extras.stacks === 'object' ? extras.stacks : {};
+    const seatUidsExtra = extras.seatUids && typeof extras.seatUids === 'object' ? extras.seatUids : {};
+    const walletsExtra = extras.wallets && typeof extras.wallets === 'object' ? extras.wallets : null;
     if (!data) {
-      return { section: 'hand', tableId, error: 'not-found' };
+      const line = { section: 'hand', tableId, error: 'not-found' };
+      if (Object.keys(stacksExtra).length > 0) line.stacks = { ...stacksExtra };
+      if (Object.keys(seatUidsExtra).length > 0) line.seatUids = { ...seatUidsExtra };
+      if (walletsExtra && Object.keys(walletsExtra).length > 0) line.wallets = { ...walletsExtra };
+      return line;
     }
     const commits = normalizeCommits(data.commits || null);
     const potBankedRaw = toNumber(data.potCents ?? null);
     const potBankedCents = typeof potBankedRaw === 'number' && Number.isFinite(potBankedRaw) ? potBankedRaw : 0;
     const streetPotCents = sumCommitValues(commits);
-    return {
+    const line = {
       section: 'hand',
       tableId,
       handNo: data.handNo ?? null,
@@ -516,6 +576,12 @@
       lastRaiseToCents: toNumber(data.lastRaiseToCents ?? null),
       updatedAtISO: timestampToISO(data.updatedAt ?? data.updatedAtISO ?? null),
     };
+    line.stacks = { ...stacksExtra };
+    line.seatUids = { ...seatUidsExtra };
+    if (walletsExtra && Object.keys(walletsExtra).length > 0) {
+      line.wallets = { ...walletsExtra };
+    }
+    return line;
   }
 
   async function fetchHandSnapshot(tableId){
@@ -524,9 +590,72 @@
       return { section: 'hand', tableId: tableId || null, error: tableId ? 'firestore-unavailable' : 'missing-tableId' };
     }
     try {
-      const ref = firestore.doc(firestore.db, `tables/${tableId}/handState/current`);
-      const snap = await firestore.getDoc(ref);
-      return buildHandLine(tableId, snap.exists() ? snap.data() : null);
+      const handRef = firestore.doc(firestore.db, `tables/${tableId}/handState/current`);
+      const seatsRef = firestore.collection(firestore.db, `tables/${tableId}/seats`);
+      const seatsQuery = firestore.query(seatsRef, firestore.orderBy('seatIndex', 'asc'));
+      const [handSnap, seatsSnap] = await Promise.all([
+        firestore.getDoc(handRef),
+        firestore.getDocs(seatsQuery),
+      ]);
+      const handData = handSnap.exists() ? handSnap.data() : null;
+      const commits = handData ? normalizeCommits(handData.commits || null) : {};
+      const seatIndexSet = new Set();
+      const seatDocs = seatsSnap?.docs || [];
+      seatDocs.forEach((docSnap, idx) => {
+        const data = docSnap.data() || {};
+        const seatIndex = toSeatNumber(data?.seatIndex ?? docSnap.id ?? idx);
+        if (seatIndex !== null && seatIndex >= 0) seatIndexSet.add(seatIndex);
+      });
+      Object.keys(commits || {}).forEach((key) => {
+        const seatIndex = toSeatNumber(key);
+        if (seatIndex !== null && seatIndex >= 0) seatIndexSet.add(seatIndex);
+      });
+      const seatIndexList = Array.from(seatIndexSet.values()).sort((a, b) => a - b);
+      const stacks = {};
+      const seatUids = {};
+      seatIndexList.forEach((idx) => {
+        const key = String(idx);
+        stacks[key] = null;
+        seatUids[key] = null;
+      });
+      seatDocs.forEach((docSnap, idx) => {
+        const data = docSnap.data() || {};
+        const seatIndex = toSeatNumber(data?.seatIndex ?? docSnap.id ?? idx);
+        if (seatIndex === null || seatIndex < 0) return;
+        const key = String(seatIndex);
+        const stackValue = toNumber(data?.stackCents ?? null);
+        stacks[key] = stackValue !== null ? stackValue : null;
+        const uidValue = typeof data?.occupiedBy === 'string' ? data.occupiedBy
+          : typeof data?.uid === 'string' ? data.uid
+          : null;
+        seatUids[key] = uidValue ?? null;
+      });
+      let wallets = null;
+      const walletUids = Array.from(new Set(Object.values(seatUids).filter((uid) => typeof uid === 'string' && uid)));
+      if (walletUids.length > 0) {
+        try {
+          const walletSnaps = await Promise.all(walletUids.map((uid) => firestore.getDoc(firestore.doc(firestore.db, `users/${uid}`))));
+          const walletMap = {};
+          walletUids.forEach((uid, idx) => {
+            const snap = walletSnaps[idx];
+            if (!snap || !snap.exists()) {
+              walletMap[uid] = null;
+              return;
+            }
+            const data = snap.data() || {};
+            const cents = toNumber(data?.walletCents ?? null);
+            walletMap[uid] = cents !== null ? cents : null;
+          });
+          wallets = walletMap;
+        } catch (err) {
+          console.warn('[jamlog] wallet read failed', err);
+        }
+      }
+      return buildHandLine(tableId, handData, {
+        stacks,
+        seatUids,
+        wallets,
+      });
     } catch (err) {
       console.warn('[jamlog] failed to read hand state', err);
       return { section: 'hand', tableId, error: err?.code || 'hand-read-failed', message: err?.message };

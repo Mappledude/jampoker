@@ -55,6 +55,26 @@ function buildSeatUids(seatDocs: FirebaseFirestore.QuerySnapshot<FirebaseFiresto
   return arr;
 }
 
+function buildSeatStacksSnapshot(
+  seatDocs: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>,
+  indices: number[],
+): Record<string, number | null> {
+  const stacks: Record<string, number | null> = {};
+  indices.forEach((idx) => {
+    if (Number.isInteger(idx) && idx >= 0) stacks[String(idx)] = null;
+  });
+  seatDocs.forEach((doc) => {
+    const data = doc.data() || {};
+    const rawIndex = data.seatIndex ?? doc.id;
+    const idx = Number(rawIndex);
+    if (!Number.isInteger(idx) || idx < 0) return;
+    const rawStack = data.stackCents;
+    const stack = typeof rawStack === 'number' && Number.isFinite(rawStack) ? rawStack : null;
+    stacks[String(idx)] = stack;
+  });
+  return stacks;
+}
+
 function isFolded(hand: HandState, seat: number): boolean {
   const f = new Set((hand.folded ?? []).map(n => Number(n)));
   return f.has(Number(seat));
@@ -107,7 +127,10 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
   const actionRef = db.doc(`tables/${tableId}/actions/${actionId}`);
   const seatsCol = tableRef.collection('seats');
 
-  await db.runTransaction(async (tx) => {
+  let telemetryPayloadForError: Record<string, any> | null = null;
+
+  try {
+    await db.runTransaction(async (tx) => {
     const [tableSnap, handSnap, actionSnap, seatsSnap] = await Promise.all([
       tx.get(tableRef),
       tx.get(handRef),
@@ -339,8 +362,10 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     }
 
     // Write hand updates
+    const commitsBefore = baseCommits ?? {};
     const commitsAfterForLog = normalizeCommits(updates.commits ?? hand.commits);
-    const streetPotAfter = sumCommits(commitsAfterForLog);
+    const commitsAfter = commitsAfterForLog ?? {};
+    const streetPotAfter = sumCommits(commitsAfter);
     const potBankedAfter = typeof updates.potCents === 'number'
       ? updates.potCents
       : typeof hand.potCents === 'number'
@@ -348,29 +373,117 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
         : 0;
     const potDisplayBefore = potBankedBefore + streetPotBefore;
     const potDisplayAfter = potBankedAfter + streetPotAfter;
-
-    console.log('takeActionTX.apply', {
-      tableId, actionId,
-      type: action?.type, seat: action?.seat,
-      handNoBefore: hand?.handNo,
-      toActBefore: hand?.toActSeat,
-      betToMatchBefore: hand?.betToMatchCents,
-      potBankedBefore,
-      streetPotBefore,
-      potDisplayBefore,
-      potBankedAfter,
-      streetPotAfter,
-      potDisplayAfter,
-      commitsShape: typeof hand?.commits,
-      updatesPreview: {
-        toActSeat: updates.toActSeat ?? null,
-        street: updates.street ?? hand?.street,
-        betToMatchCents: updates.betToMatchCents ?? hand?.betToMatchCents,
-        potCents: updates.potCents ?? hand?.potCents ?? null,
-        potBankedAfter,
-        potDisplayAfter,
+    const seatIndexSet = new Set<number>();
+    seatUids.forEach((_, idx) => seatIndexSet.add(idx));
+    Object.keys(commitsBefore || {}).forEach((key) => {
+      const idx = Number(key);
+      if (Number.isInteger(idx) && idx >= 0) seatIndexSet.add(idx);
+    });
+    Object.keys(commitsAfter || {}).forEach((key) => {
+      const idx = Number(key);
+      if (Number.isInteger(idx) && idx >= 0) seatIndexSet.add(idx);
+    });
+    if (Number.isInteger(seat) && seat >= 0) seatIndexSet.add(seat);
+    const seatIndexList = Array.from(seatIndexSet.values()).sort((a, b) => a - b);
+    const stacksBefore = buildSeatStacksSnapshot(seatsSnap, seatIndexList);
+    const stacksAfter = { ...stacksBefore };
+    const seatUidSet = new Set<string>();
+    seatUids.forEach((uid) => {
+      if (typeof uid === 'string' && uid) seatUidSet.add(uid);
+    });
+    let walletsBefore: Record<string, number | null> | null = null;
+    if (seatUidSet.size > 0) {
+      const uidList = Array.from(seatUidSet.values());
+      try {
+        const walletSnaps = await Promise.all(uidList.map((uid) => tx.get(db.doc(`users/${uid}`))));
+        const walletMap: Record<string, number | null> = {};
+        uidList.forEach((uid, idx) => {
+          const snap = walletSnaps[idx];
+          if (!snap.exists) {
+            walletMap[uid] = null;
+            return;
+          }
+          const data = snap.data() || {};
+          const raw = (data as any).walletCents;
+          walletMap[uid] = typeof raw === 'number' && Number.isFinite(raw) ? raw : null;
+        });
+        walletsBefore = walletMap;
+      } catch (walletErr) {
+        console.warn('takeActionTX.wallets.read.fail', {
+          tableId,
+          actionId,
+          message: (walletErr as any)?.message ?? null,
+          code: (walletErr as any)?.code ?? null,
+        });
+      }
+    }
+    const walletsAfter = walletsBefore ? { ...walletsBefore } : null;
+    const seatKeySet = new Set<string>();
+    Object.keys(stacksBefore || {}).forEach((key) => seatKeySet.add(key));
+    Object.keys(commitsBefore || {}).forEach((key) => seatKeySet.add(key));
+    Object.keys(commitsAfter || {}).forEach((key) => seatKeySet.add(key));
+    if (Number.isInteger(seat) && seat >= 0) seatKeySet.add(String(seat));
+    const seatKeys = Array.from(seatKeySet.values()).filter((key) => /^-?\d+$/.test(key)).sort((a, b) => Number(a) - Number(b));
+    const commitDeltas: Record<string, number> = {};
+    const stackDeltas: Record<string, number> = {};
+    seatKeys.forEach((key) => {
+      const beforeCommit = commitsBefore?.[key] ?? 0;
+      const afterCommit = commitsAfter?.[key] ?? 0;
+      const commitDelta = afterCommit - beforeCommit;
+      if (commitDelta !== 0 || key === String(seat)) {
+        commitDeltas[key] = commitDelta;
+      }
+      const beforeStack = stacksBefore?.[key];
+      const afterStack = stacksAfter?.[key];
+      const beforeStackNum = typeof beforeStack === 'number' ? beforeStack : 0;
+      const afterStackNum = typeof afterStack === 'number' ? afterStack : 0;
+      if ((beforeStack ?? null) !== (afterStack ?? null) || key === String(seat)) {
+        stackDeltas[key] = afterStackNum - beforeStackNum;
       }
     });
+    const walletsBeforeForLog = walletsBefore && Object.keys(walletsBefore).length > 0 ? walletsBefore : undefined;
+    const walletsAfterForLog = walletsAfter && Object.keys(walletsAfter).length > 0 ? walletsAfter : undefined;
+    const potBefore = potDisplayBefore;
+    const potAfter = potDisplayAfter;
+    const logPayload = {
+      tableId,
+      actionId,
+      type: action?.type,
+      seat: action?.seat,
+      handNo: hand?.handNo,
+      before: {
+        toActSeat: hand?.toActSeat,
+        street: hand?.street,
+        betToMatchCents: hand?.betToMatchCents,
+        potCents: potBefore,
+        commits: commitsBefore,
+        stacks: stacksBefore,
+        wallets: walletsBeforeForLog,
+      },
+      after: {
+        toActSeat: updates.toActSeat,
+        street: updates.street ?? hand?.street,
+        betToMatchCents: updates.betToMatchCents ?? hand?.betToMatchCents,
+        potCents: potAfter,
+        commits: commitsAfter,
+        stacks: stacksAfter,
+        wallets: walletsAfterForLog,
+      },
+      deltas: {
+        pot: potAfter - potBefore,
+        stacks: stackDeltas,
+        commits: commitDeltas,
+      },
+      acting: {
+        seat: action?.seat ?? null,
+        uid: seat >= 0 ? seatUids[seat] ?? null : null,
+        amountCents: typeof action?.amountCents === 'number' ? action.amountCents : null,
+        commitDelta: commitDeltas[String(seat)] ?? 0,
+        stackDelta: stackDeltas[String(seat)] ?? 0,
+      },
+    };
+    telemetryPayloadForError = logPayload;
+    console.log('takeActionTX.apply', logPayload);
     tx.update(handRef, updates);
 
     // Mark action applied here so worker doesn’t reprocess
@@ -380,5 +493,25 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
       reason: null,
       appliedAt: FieldValue.serverTimestamp(),
     });
-  });
+    });
+  } catch (err) {
+    const errorPayload = {
+      message: (err as any)?.message ?? String(err),
+      code: (err as any)?.code ?? null,
+      details: (err as any)?.details ?? null,
+    };
+    if (telemetryPayloadForError) {
+      console.error('takeActionTX.apply.error', {
+        ...telemetryPayloadForError,
+        error: errorPayload,
+      });
+    } else {
+      console.error('takeActionTX.apply.error', {
+        tableId,
+        actionId,
+        error: errorPayload,
+      });
+    }
+    throw err;
+  }
 });
