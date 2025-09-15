@@ -33,7 +33,7 @@
       runTransaction, serverTimestamp, increment, getDoc, updateDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
     import { awaitAuthReady } from "/auth.js";
-    if (window.jamlog && isDebug()) {
+    if (window.jamlog) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'LOBBY' });
     }
 
