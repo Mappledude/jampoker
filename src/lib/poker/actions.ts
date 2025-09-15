@@ -2,7 +2,7 @@ import { collection, doc, serverTimestamp, setDoc } from 'firebase/firestore';
 
 export type PlayerAction = {
   type: 'check' | 'call' | 'bet' | 'raise' | 'fold';
-  amountCents?: number;
+  amountCents?: number; // For bet/raise, this is the *new* betToMatch level (total to match), not the delta
 };
 
 export async function enqueueAction(
@@ -22,7 +22,7 @@ export async function enqueueAction(
     createdByUid,
     actorUid,
     createdAt: serverTimestamp(),
-    applied: false,
     clientTs: Date.now(),
+    applied: false,
   });
 }
