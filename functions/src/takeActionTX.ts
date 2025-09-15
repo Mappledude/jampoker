@@ -2,8 +2,12 @@ import { onCall, HttpsError, CallableRequest } from 'firebase-functions/v2/https
 import { FieldValue } from 'firebase-admin/firestore';
 import { db } from './admin';
 
+// --- helpers (keep simple for now) ---
+const sum = (obj: Record<string, number>) =>
+  Object.values(obj || {}).reduce((m, v) => m + Number(v || 0), 0);
+
 function nextActiveSeat(seats: any[], hand: any, start: number): number {
-  const total = seats.length;
+  const total = seats.length || 9;
   const folded = new Set((hand?.folded ?? []).map((n: any) => Number(n)));
   for (let i = 1; i <= total; i++) {
     const idx = (start + i) % total;
@@ -12,18 +16,6 @@ function nextActiveSeat(seats: any[], hand: any, start: number): number {
   }
   return start;
 }
-
-function activeSeats(seats: any[], hand: any): number[] {
-  const folded = new Set((hand?.folded ?? []).map((n: any) => Number(n)));
-  return seats
-    .map((s: any, i: number) => (s?.uid && !folded.has(i) ? i : -1))
-    .filter((i: number) => i >= 0);
-}
-
-function sumCommits(commits: Record<string, number>): number {
-  return Object.values(commits || {}).reduce((m, v) => m + Number(v || 0), 0);
-}
-
 function streetStarter(seats: any[], hand: any): number {
   if (hand.street === 'preflop') {
     const bb = typeof hand.bbSeat === 'number' ? hand.bbSeat : hand.dealerSeat;
@@ -31,20 +23,15 @@ function streetStarter(seats: any[], hand: any): number {
   }
   return nextActiveSeat(seats, hand, hand.dealerSeat ?? 0);
 }
-
 function nextStreet(street: string): string {
-  switch (street) {
-    case 'preflop':
-      return 'flop';
-    case 'flop':
-      return 'turn';
-    case 'turn':
-      return 'river';
-    default:
-      return 'showdown';
-  }
+  return street === 'preflop'
+    ? 'flop'
+    : street === 'flop'
+    ? 'turn'
+    : street === 'turn'
+    ? 'river'
+    : 'showdown';
 }
-
 function advanceStreet(hand: any, seats: any[]) {
   const street = nextStreet(hand.street);
   const toAct = street === 'showdown' ? null : streetStarter(seats, hand);
@@ -58,77 +45,77 @@ function advanceStreet(hand: any, seats: any[]) {
 }
 
 export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
-  const { tableId, kind, expectedHandNo, expectedToActSeat, expectedUpdatedAt } = request.data || {};
-  if (!tableId || !kind) throw new HttpsError('invalid-argument', 'missing-fields');
+  const { tableId, actionId } = request.data || {};
+  if (!tableId || !actionId) throw new HttpsError('invalid-argument', 'missing-fields');
+
   const handRef = db.doc(`tables/${tableId}/handState/current`);
   const tableRef = db.doc(`tables/${tableId}`);
+  const actionRef = db.doc(`tables/${tableId}/actions/${actionId}`);
 
   await db.runTransaction(async (tx) => {
-    const [handSnap, tableSnap] = await Promise.all([tx.get(handRef), tx.get(tableRef)]);
-    const hand = handSnap.data();
-    const table = tableSnap.data();
-    if (!hand || !table) throw new HttpsError('failed-precondition', 'hand-or-table-missing');
+    const [handSnap, tableSnap, actionSnap] = await Promise.all([
+      tx.get(handRef),
+      tx.get(tableRef),
+      tx.get(actionRef),
+    ]);
 
-    if (hand.handNo !== expectedHandNo) throw new HttpsError('aborted', 'stale-handno');
-    if (
-      expectedUpdatedAt &&
-      +hand.updatedAt?.toMillis?.() !== +expectedUpdatedAt?.toMillis?.()
-    ) {
-      throw new HttpsError('aborted', 'stale-hand');
-    }
-    const mySeat = table.seats.findIndex((s: any) => s?.uid === request.auth?.uid);
-    if (mySeat < 0) throw new HttpsError('permission-denied', 'not-seated');
-    if (hand.toActSeat !== mySeat || expectedToActSeat !== mySeat) {
+    const hand = handSnap.data() as any;
+    const table = tableSnap.data() as any;
+    const action = actionSnap.data() as any;
+    if (!hand || !table || !action)
+      throw new HttpsError('failed-precondition', 'missing-docs');
+    if (action.applied === true) return; // idempotent
+
+    const seats = table?.seats ?? [];
+    const seatIdx = Number(action.seat);
+    if (hand.toActSeat !== seatIdx)
       throw new HttpsError('failed-precondition', 'not-your-turn');
+
+    // Actor sanity: accept either seats[i].uid or occupiedBy
+    const seatOccupant = seats?.[seatIdx]?.uid ?? seats?.[seatIdx]?.occupiedBy ?? null;
+    if (action.actorUid && seatOccupant && action.actorUid !== seatOccupant) {
+      throw new HttpsError('permission-denied', 'seat-mismatch');
     }
 
     const commits: Record<string, number> = { ...(hand.commits ?? {}) };
-    const key = String(mySeat);
+    const key = String(seatIdx);
     const myCommit = commits[key] ?? 0;
-    const toMatch = hand.betToMatchCents ?? 0;
+    const toMatch = Number(hand.betToMatchCents ?? 0);
     const owe = Math.max(0, toMatch - myCommit);
 
-    const startSeat = streetStarter(table.seats, hand);
-    const nextSeat = nextActiveSeat(table.seats, hand, mySeat);
-    const actives = activeSeats(table.seats, hand);
+    const starter = streetStarter(seats, hand);
+    const nextSeat = nextActiveSeat(seats, hand, seatIdx);
+    const actives = seats
+      .map((s: any, i: number) => (s?.uid ? i : -1))
+      .filter((i: number) => i >= 0);
 
-    let updates: any = { updatedAt: FieldValue.serverTimestamp() };
+    let updates: any = {
+      updatedAt: FieldValue.serverTimestamp(),
+      lastActionId: actionId,
+    };
 
-    if (kind === 'call') {
-      if (mySeat !== hand.toActSeat) {
-        throw new HttpsError('failed-precondition', 'cannot-call');
-      }
-      if (owe <= 0) {
-        // treat as check when nothing owed
-        updates.potCents = sumCommits(commits);
-        if (nextSeat === startSeat) {
-          updates = { ...updates, ...advanceStreet(hand, table.seats) };
-        } else {
-          updates.toActSeat = nextSeat;
-        }
+    if (action.type === 'check') {
+      if (owe > 0) throw new HttpsError('failed-precondition', 'cannot-check');
+      const allMatched = actives.every((i) => (commits[String(i)] ?? 0) >= toMatch);
+      if (allMatched && nextSeat === starter) {
+        updates = { ...updates, ...advanceStreet(hand, seats), potCents: sum(commits) };
       } else {
+        updates = { ...updates, toActSeat: nextSeat, potCents: sum(commits) };
+      }
+    } else if (action.type === 'call') {
+      if (owe > 0) {
         commits[key] = myCommit + owe;
         updates.commits = commits;
-        updates.potCents = sumCommits(commits);
-        const allMatched = actives.every((s) => (commits[String(s)] ?? 0) >= toMatch);
-        if (allMatched && nextSeat === startSeat) {
-          updates = { ...updates, ...advanceStreet(hand, table.seats) };
-        } else {
-          updates.toActSeat = nextSeat;
-        }
       }
-    } else if (kind === 'check') {
-      if (owe > 0 || mySeat !== hand.toActSeat) {
-        throw new HttpsError('failed-precondition', 'cannot-check');
-      }
-      updates.potCents = sumCommits(commits);
-      if (nextSeat === startSeat) {
-        updates = { ...updates, ...advanceStreet(hand, table.seats) };
+      updates.potCents = sum(commits);
+      const allMatched = actives.every((i) => (commits[String(i)] ?? 0) >= toMatch);
+      if (allMatched && nextSeat === starter) {
+        updates = { ...updates, ...advanceStreet(hand, seats) };
       } else {
         updates.toActSeat = nextSeat;
       }
     } else {
-      throw new HttpsError('invalid-argument', 'bad-kind');
+      throw new HttpsError('invalid-argument', 'unsupported-in-02A');
     }
 
     tx.update(handRef, updates);
