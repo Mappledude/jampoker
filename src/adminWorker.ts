@@ -6,6 +6,7 @@ import {
   orderBy,
   limit,
   onSnapshot,
+  doc,
   updateDoc,
   serverTimestamp,
 } from 'firebase/firestore';
@@ -27,26 +28,26 @@ export function startActionWorker(tableId: string) {
     q,
     async (snap) => {
       for (const docSnap of snap.docs) {
-        const actionRef = docSnap.ref;
+        const actionRef = doc(db, `tables/${tableId}/actions/${docSnap.id}`);
 
         try {
+          console.debug('worker.apply.start', { tableId, actionId: docSnap.id });
           await takeActionTX({ tableId, actionId: docSnap.id });
-          // NOTE: CF already marks applied:true. Leaving this no-op.
-          // If you prefer the worker to mark too (and you loosen rules), uncomment:
-          // await updateDoc(actionRef, { applied: true, appliedAt: serverTimestamp() });
+          console.debug('worker.apply.ok', { tableId, actionId: docSnap.id });
+          await updateDoc(actionRef, { applied: true, appliedAt: serverTimestamp() });
         } catch (err: any) {
-          // If you loosen rules (see rules change below), you may mark invalid here:
-          try {
-            await updateDoc(actionRef, {
-              applied: true,
-              invalid: true,
-              reason: err?.code || String(err),
-              appliedAt: serverTimestamp(),
-            });
-          } catch {
-            // ignore (rules may block client updates)
-          }
-          console.error('worker.apply.error', { tableId, actionId: docSnap.id, code: err?.code, message: err?.message });
+          console.error('worker.apply.fail', {
+            tableId,
+            actionId: docSnap.id,
+            code: err?.code,
+            message: err?.message,
+          });
+          await updateDoc(actionRef, {
+            applied: true,
+            invalid: true,
+            reason: err?.code || String(err),
+            appliedAt: serverTimestamp(),
+          });
         }
       }
     },
