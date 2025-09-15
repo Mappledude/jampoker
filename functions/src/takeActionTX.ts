@@ -211,6 +211,9 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     const startSeat = streetStarter(seatUids, hand);
     const nextSeat = nextActiveSeat(seatUids, hand, seat);
     const actives = activeSeats(seatUids, hand);
+    const potBankedBefore = typeof hand.potCents === 'number' ? hand.potCents : 0;
+    const streetPotBefore = sumCommits(baseCommits);
+    const computeBankedTotal = () => potBankedBefore + sumCommits(commits);
 
     const updates: Partial<HandState> & Record<string, any> = {
       lastActionId: actionId,
@@ -227,57 +230,56 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
       const allMatched = actives.every(s => (commits[String(s)] ?? 0) >= toMatch); // true for 0
       if (nextSeat === startSeat && allMatched) {
         // advance street
-        const pot = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits(commits);
-        updates.street = nextStreet(hand.street);
+        const pot = computeBankedTotal();
+        const street = nextStreet(hand.street);
+        updates.street = street;
         updates.betToMatchCents = 0;
         updates.lastAggressorSeat = null;
         updates.lastRaiseSizeCents = null;
         updates.lastRaiseToCents = null;
-        updates.toActSeat = updates.street === 'showdown' ? null : streetStarter(seatUids, hand);
         updates.potCents = pot;
         updates.commits = {}; // reset street commits
+        updates.toActSeat = street === 'showdown' ? null : streetStarter(seatUids, hand);
       } else {
         updates.toActSeat = nextSeat;
-        updates.potCents = typeof hand.potCents === 'number' ? hand.potCents : 0;
       }
     } else if (type === 'call') {
       if (owe <= 0) {
         // treat as check when nothing owed
         const allMatched = actives.every(s => (commits[String(s)] ?? 0) >= toMatch);
         if (nextSeat === startSeat && allMatched) {
-          const pot = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits(commits);
-          updates.street = nextStreet(hand.street);
+          const pot = computeBankedTotal();
+          const street = nextStreet(hand.street);
+          updates.street = street;
           updates.betToMatchCents = 0;
           updates.lastAggressorSeat = null;
           updates.lastRaiseSizeCents = null;
           updates.lastRaiseToCents = null;
-          updates.toActSeat = updates.street === 'showdown' ? null : streetStarter(seatUids, hand);
           updates.potCents = pot;
           updates.commits = {};
+          updates.toActSeat = street === 'showdown' ? null : streetStarter(seatUids, hand);
         } else {
           updates.toActSeat = nextSeat;
-          updates.potCents = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits(commits);
         }
       } else {
         // pay owe to match
         commits[key] = myCommit + owe;
         const newToMatch = toMatch; // unchanged on a call
-        const potNow = (typeof hand.potCents === 'number' ? hand.potCents : 0);
         const allMatched = actives.every(s => (commits[String(s)] ?? 0) >= newToMatch);
         if (nextSeat === startSeat && allMatched) {
-          const pot = potNow + sumCommits(commits);
-          updates.street = nextStreet(hand.street);
+          const pot = computeBankedTotal();
+          const street = nextStreet(hand.street);
+          updates.street = street;
           updates.betToMatchCents = 0;
           updates.lastAggressorSeat = null;
           updates.lastRaiseSizeCents = null;
           updates.lastRaiseToCents = null;
-          updates.toActSeat = updates.street === 'showdown' ? null : streetStarter(seatUids, hand);
           updates.potCents = pot;
           updates.commits = {};
+          updates.toActSeat = street === 'showdown' ? null : streetStarter(seatUids, hand);
         } else {
           updates.toActSeat = nextSeat;
           updates.commits = commits;
-          updates.potCents = potNow + sumCommits(commits);
           updates.betToMatchCents = newToMatch;
         }
       }
@@ -295,7 +297,6 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
       updates.lastRaiseSizeCents = amt;
       updates.lastRaiseToCents = newToMatch;
       updates.toActSeat = nextSeat;
-      updates.potCents = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits(commits);
     } else if (type === 'raise') {
       if (toMatch <= 0) throw new HttpsError('failed-precondition', 'cannot-raise-without-bet');
       const raiseSize = Number(action.amountCents || 0); // size of raise (not total)
@@ -312,7 +313,6 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
       updates.lastRaiseSizeCents = raiseSize;
       updates.lastRaiseToCents = newToMatch;
       updates.toActSeat = nextSeat;
-      updates.potCents = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits(commits);
     } else if (type === 'fold') {
       const folded = new Set((hand.folded ?? []).map(n => Number(n)));
       folded.add(seat);
@@ -321,32 +321,54 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
       const remain = activeSeats(seatUids, { ...hand, folded: updates.folded } as HandState);
       if (remain.length <= 1) {
         // hand ends
+        const pot = computeBankedTotal();
         updates.street = 'showdown';
         updates.toActSeat = null;
-        updates.potCents = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits(commits);
+        updates.potCents = pot;
+        updates.commits = {};
+        updates.betToMatchCents = 0;
+        updates.lastAggressorSeat = null;
+        updates.lastRaiseSizeCents = null;
+        updates.lastRaiseToCents = null;
       } else {
         // continue to next player
         updates.toActSeat = nextActiveSeat(seatUids, { ...hand, folded: updates.folded } as HandState, seat);
-        updates.potCents = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits(commits);
       }
     } else {
       throw new HttpsError('invalid-argument', 'bad-action-type');
     }
 
     // Write hand updates
+    const commitsAfterForLog = normalizeCommits(updates.commits ?? hand.commits);
+    const streetPotAfter = sumCommits(commitsAfterForLog);
+    const potBankedAfter = typeof updates.potCents === 'number'
+      ? updates.potCents
+      : typeof hand.potCents === 'number'
+        ? hand.potCents
+        : 0;
+    const potDisplayBefore = potBankedBefore + streetPotBefore;
+    const potDisplayAfter = potBankedAfter + streetPotAfter;
+
     console.log('takeActionTX.apply', {
       tableId, actionId,
       type: action?.type, seat: action?.seat,
       handNoBefore: hand?.handNo,
       toActBefore: hand?.toActSeat,
       betToMatchBefore: hand?.betToMatchCents,
-      potBefore: sumCommits(baseCommits),
+      potBankedBefore,
+      streetPotBefore,
+      potDisplayBefore,
+      potBankedAfter,
+      streetPotAfter,
+      potDisplayAfter,
       commitsShape: typeof hand?.commits,
       updatesPreview: {
         toActSeat: updates.toActSeat ?? null,
         street: updates.street ?? hand?.street,
         betToMatchCents: updates.betToMatchCents ?? hand?.betToMatchCents,
-        potCents: updates.potCents
+        potCents: updates.potCents ?? hand?.potCents ?? null,
+        potBankedAfter,
+        potDisplayAfter,
       }
     });
     tx.update(handRef, updates);

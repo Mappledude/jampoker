@@ -14,7 +14,8 @@
       "queryScope": "COLLECTION",
       "fields": [
         { "fieldPath": "applied", "order": "ASCENDING" },
-        { "fieldPath": "createdAt", "order": "ASCENDING" }
+        { "fieldPath": "createdAt", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
       ]
     }
   ],
