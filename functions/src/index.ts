@@ -1,3 +1,4 @@
+// Actions are applied only by the callable takeActionTX({ tableId, actionId }) via the admin worker.
 // Cloud Functions: auto-start hands, dealer rotation, next-dealer variant
 import { FieldValue, DocumentReference, Transaction, CollectionReference } from "firebase-admin/firestore";
 import { db } from "./admin";
@@ -725,4 +726,3 @@ export const onVariantChosen = onDocumentUpdated(
   }
 );
 
-export { onActionCreate } from "./onActionCreate";

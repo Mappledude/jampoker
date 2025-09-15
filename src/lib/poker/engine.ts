@@ -8,7 +8,7 @@ export interface HandState {
   bbSeat: number;
   toActSeat: number | null;
   betToMatchCents: number;
-  commits: number[]; // length 9
+  commits: Record<string, number>;
   lastAggressorSeat: number | null;
   activeSeats: boolean[]; // length 9
   version?: number;
@@ -66,7 +66,7 @@ function streetStarter(state: HandState): number {
 function allMatched(state: HandState): boolean {
   const toMatch = state.betToMatchCents;
   return activeSeatIndices(state.activeSeats).every(
-    (s) => state.commits[s] === toMatch
+    (s) => (state.commits[String(s)] ?? 0) === toMatch
   );
 }
 
@@ -74,39 +74,40 @@ export function applyAction(state: HandState, action: Action): HandState {
   if (action.handNo !== state.handNo) throw new Error('wrong-hand');
   if (state.toActSeat !== action.seat) throw new Error('not-your-turn');
 
-  const commits = state.commits.slice();
+  let commits: Record<string, number> = { ...state.commits };
   const active = state.activeSeats.slice();
   let betToMatch = state.betToMatchCents;
   let lastAggressor = state.lastAggressorSeat;
   let street: Street = state.street;
 
   const nextSeat = () => nextActiveSeat(active, action.seat);
+  const key = String(action.seat);
 
   switch (action.type) {
     case 'check': {
-      if (commits[action.seat] !== betToMatch) throw new Error('cannot-check');
+      if ((commits[key] ?? 0) !== betToMatch) throw new Error('cannot-check');
       state.toActSeat = nextSeat();
       break;
     }
     case 'call': {
-      commits[action.seat] = betToMatch;
+      commits[key] = betToMatch;
       state.toActSeat = nextSeat();
       break;
     }
     case 'bet': {
-      if (betToMatch !== commits[action.seat]) throw new Error('cannot-bet');
+      if (betToMatch !== (commits[key] ?? 0)) throw new Error('cannot-bet');
       if (!action.amountCents || action.amountCents <= 0) throw new Error('bad-amount');
-      commits[action.seat] += action.amountCents;
-      betToMatch = commits[action.seat];
+      commits[key] = (commits[key] ?? 0) + action.amountCents;
+      betToMatch = commits[key];
       lastAggressor = action.seat;
       state.toActSeat = nextSeat();
       break;
     }
     case 'raise': {
       if (!action.amountCents || action.amountCents <= 0) throw new Error('bad-amount');
-      const newToMatch = commits[action.seat] + action.amountCents;
+      const newToMatch = (commits[key] ?? 0) + action.amountCents;
       if (newToMatch <= betToMatch) throw new Error('bad-amount');
-      commits[action.seat] = newToMatch;
+      commits[key] = newToMatch;
       betToMatch = newToMatch;
       lastAggressor = action.seat;
       state.toActSeat = nextSeat();
@@ -118,7 +119,7 @@ export function applyAction(state: HandState, action: Action): HandState {
       if (remaining.length <= 1) {
         street = 'showdown';
         betToMatch = 0;
-        commits.fill(0);
+        commits = {};
         lastAggressor = null;
         state.toActSeat = null;
       } else {
@@ -149,7 +150,7 @@ export function applyAction(state: HandState, action: Action): HandState {
       const newStreet = nextStreet(street);
       next.street = newStreet;
       next.betToMatchCents = 0;
-      next.commits = Array(9).fill(0);
+      next.commits = {};
       next.lastAggressorSeat = null;
       next.toActSeat = newStreet === 'showdown' ? null : streetStarter(next);
     }

@@ -1,6 +1,7 @@
 import { onCall, HttpsError, CallableRequest } from 'firebase-functions/v2/https';
 import { FieldValue, Timestamp } from 'firebase-admin/firestore';
 import { db } from './admin';
+import { normalizeCommits, sumCommits } from './lib/normalize';
 
 type Street = 'preflop' | 'flop' | 'turn' | 'river' | 'showdown';
 
@@ -38,14 +39,6 @@ interface HandState {
   version?: number | FirebaseFirestore.FieldValue;
   lastActionId?: string | null;
   lastWriteBy?: string | null;
-}
-
-function sum(values: Array<number | null | undefined>): number {
-  return values.reduce<number>((total, value) => total + Number(value ?? 0), 0);
-}
-
-function sumCommits(commits: Record<string, number> | undefined): number {
-  return sum(Object.values(commits || {}));
 }
 
 function buildSeatUids(seatDocs: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>): (string | null)[] {
@@ -104,7 +97,7 @@ function nextStreet(street: Street): Street {
 
 export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
   const { tableId, actionId } = request.data || {};
-  console.log('takeActionTX.in', { tableId, actionId, now: Date.now() });
+  const now = Date.now();
   if (!tableId || !actionId) {
     throw new HttpsError('invalid-argument', 'missing { tableId, actionId }');
   }
@@ -122,12 +115,20 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
       tx.get(seatsCol),
     ]);
 
+    const handData = handSnap.data() as HandState | undefined;
+    console.log('takeActionTX.in', {
+      tableId,
+      actionId,
+      now,
+      commitsShape: typeof handData?.commits,
+    });
+
     if (!tableSnap.exists) throw new HttpsError('failed-precondition', 'table-missing');
     if (!handSnap.exists) throw new HttpsError('failed-precondition', 'hand-missing');
-    if (!actionSnap.exists) throw new HttpsError('failed-precondition', 'action-missing');
+    if (!actionSnap.exists) throw new HttpsError('invalid-argument', 'action-missing');
 
     const table = tableSnap.data() as any;
-    const hand = (handSnap.data() as HandState);
+    const hand = handData as HandState;
     const action = actionSnap.data() as ActionDoc;
 
     if (action.applied === true || action.invalid === true) {
@@ -138,8 +139,10 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     // Validate hand number matches
     if (typeof action.handNo !== 'number' || action.handNo !== hand.handNo) {
       tx.update(actionRef, {
-        applied: true, invalid: true,
+        applied: true,
+        invalid: true,
         error: 'hand-mismatch',
+        reason: 'hand-mismatch',
         appliedAt: FieldValue.serverTimestamp(),
       });
       return;
@@ -153,21 +156,30 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     // Validate seat and actor
     if (!Number.isInteger(seat) || seat < 0 || seat >= seatUids.length) {
       tx.update(actionRef, {
-        applied: true, invalid: true, error: 'bad-seat',
+        applied: true,
+        invalid: true,
+        error: 'bad-seat',
+        reason: 'bad-seat',
         appliedAt: FieldValue.serverTimestamp(),
       });
       return;
     }
     if (!seatUids[seat]) {
       tx.update(actionRef, {
-        applied: true, invalid: true, error: 'seat-empty',
+        applied: true,
+        invalid: true,
+        error: 'seat-empty',
+        reason: 'seat-empty',
         appliedAt: FieldValue.serverTimestamp(),
       });
       return;
     }
     if (actorUid && seatUids[seat] && actorUid !== seatUids[seat]) {
       tx.update(actionRef, {
-        applied: true, invalid: true, error: 'actor-seat-mismatch',
+        applied: true,
+        invalid: true,
+        error: 'actor-seat-mismatch',
+        reason: 'actor-seat-mismatch',
         appliedAt: FieldValue.serverTimestamp(),
       });
       return;
@@ -176,14 +188,18 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     // Validate turn
     if (hand.toActSeat !== seat) {
       tx.update(actionRef, {
-        applied: true, invalid: true, error: 'not-your-turn',
+        applied: true,
+        invalid: true,
+        error: 'not-your-turn',
+        reason: 'not-your-turn',
         appliedAt: FieldValue.serverTimestamp(),
       });
       return;
     }
 
     // Prepare betting variables
-    const commits: Record<string, number> = { ...(hand.commits ?? {}) };
+    const baseCommits = normalizeCommits(hand.commits);
+    const commits: Record<string, number> = { ...baseCommits };
     const key = String(seat);
     const myCommit = commits[key] ?? 0;
     const toMatch = hand.betToMatchCents ?? 0;
@@ -222,7 +238,7 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
         updates.commits = {}; // reset street commits
       } else {
         updates.toActSeat = nextSeat;
-        updates.potCents = (typeof hand.potCents === 'number' ? hand.potCents : 0) + sumCommits({});
+        updates.potCents = typeof hand.potCents === 'number' ? hand.potCents : 0;
       }
     } else if (type === 'call') {
       if (owe <= 0) {
@@ -324,7 +340,8 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
       handNoBefore: hand?.handNo,
       toActBefore: hand?.toActSeat,
       betToMatchBefore: hand?.betToMatchCents,
-      potBefore: sumCommits(hand?.commits || {}),
+      potBefore: sumCommits(baseCommits),
+      commitsShape: typeof hand?.commits,
       updatesPreview: {
         toActSeat: updates.toActSeat ?? null,
         street: updates.street ?? hand?.street,
@@ -338,6 +355,7 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     tx.update(actionRef, {
       applied: true,
       invalid: false,
+      reason: null,
       appliedAt: FieldValue.serverTimestamp(),
     });
   });

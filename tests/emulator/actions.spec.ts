@@ -11,7 +11,7 @@ describe('version increments', () => {
       bbSeat: 0,
       toActSeat: 1,
       betToMatchCents: 50,
-      commits: [50,25,0,0,0,0,0,0,0],
+      commits: { '0': 50, '1': 25 },
       lastAggressorSeat: null,
       activeSeats: [true,true,false,false,false,false,false,false,false],
       // version not part of HandState interface but we'll track separately

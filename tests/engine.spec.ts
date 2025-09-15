@@ -11,7 +11,7 @@ describe('engine applyAction', () => {
       bbSeat: 0,
       toActSeat: 1,
       betToMatchCents: 50,
-      commits: [50, 25, 0, 0, 0, 0, 0, 0, 0],
+      commits: { '0': 50, '1': 25 },
       lastAggressorSeat: null,
       activeSeats: [true, true, false, false, false, false, false, false, false],
     };
@@ -20,13 +20,13 @@ describe('engine applyAction', () => {
   it('heads-up call then check to flop', () => {
     let state = baseHeadsUp();
     state = applyAction(state, { handNo: 1, seat: 1, type: 'call' });
-    assert.equal(state.commits[1], 50);
+    assert.equal(state.commits['1'], 50);
     assert.equal(state.toActSeat, 0);
     assert.equal(state.street, 'preflop');
 
     state = applyAction(state, { handNo: 1, seat: 0, type: 'check' });
     assert.equal(state.street, 'flop');
-    assert.deepEqual(state.commits.slice(0,2), [0,0]);
+    assert.deepEqual(state.commits, {});
     assert.equal(state.toActSeat, 0);
   });
 
@@ -41,7 +41,7 @@ describe('engine applyAction', () => {
     assert.equal(state.street, 'flop');
     assert.equal(state.toActSeat, 0);
     assert.equal(state.betToMatchCents, 0);
-    assert.deepEqual(state.commits.slice(0,2), [0,0]);
+    assert.deepEqual(state.commits, {});
   });
 
   it('three handed round trip', () => {
@@ -53,7 +53,7 @@ describe('engine applyAction', () => {
       bbSeat: 2,
       toActSeat: 0,
       betToMatchCents: 50,
-      commits: [0,25,50,0,0,0,0,0,0],
+      commits: { '1': 25, '2': 50 },
       lastAggressorSeat: null,
       activeSeats: [true,true,true,false,false,false,false,false,false],
     };
@@ -62,6 +62,6 @@ describe('engine applyAction', () => {
     state = applyAction(state, { handNo:1, seat:2, type:'call' });
     assert.equal(state.street, 'flop');
     assert.equal(state.toActSeat, 1); // BB (seat2) acted last, so flop starts at seat1 (sb left of dealer)
-    assert.deepEqual(state.commits.slice(0,3), [0,0,0]);
+    assert.deepEqual(state.commits, {});
   });
 });
