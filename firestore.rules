@@ -74,7 +74,10 @@ service cloud.firestore {
       match /actions/{actionId} {
         allow read: if true;
         allow create: if request.auth != null;
-        allow update, delete: if false;
+        allow update: if isAdmin(tableId) &&
+          request.resource.data.diff(resource.data).changedKeys()
+            .hasOnly(['applied','appliedAt','invalid','reason','error']);
+        allow delete: if false;
       }
     }
 
