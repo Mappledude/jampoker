@@ -15,6 +15,7 @@
       <button id="chat-toggle" class="toolbar-btn" aria-pressed="false" style="margin-left:auto;margin-right:8px;">Chat</button>
       <span id="debug-chip" class="small" style="cursor:pointer;padding:4px 8px;border:1px solid #334155;border-radius:8px;">Debug: OFF</span>
     </nav>
+    <button id="btn-next-street" data-admin-only style="display:none">Next Street (Admin)</button>
     <div id="you"></div>
     <div id="error" class="card" style="display:none;"></div>
     <div id="table-info" class="card" style="margin-top:16px;"></div>
@@ -668,6 +669,7 @@
         createdByUid,
         actorUid,
         createdAt: serverTimestamp(),
+        clientTs: Date.now(),
         applied: false,
       });
     }
@@ -678,6 +680,38 @@
       const pos = handData?.positions || {};
       const folded = Object.keys(handData?.folded || {}).join(',');
       debugBox.textContent = `id=${tableId}\ncurrentHandId=${tableData?.currentHandId ?? 'null'}\nnextDealerId=${tableData?.nextDealerId ?? 'null'}\nnextDealerName=${tableData?.nextDealerName ?? 'null'}\nnextVariantId=${tableData?.nextVariantId ?? 'null'}\npositions=${pos.dealerSeatNum ?? 'null'},${pos.sbSeatNum ?? 'null'},${pos.bbSeatNum ?? 'null'}\nstage=${handData?.stage ?? 'null'}\nactorSeatNum=${handData?.actorSeatNum ?? 'null'}\nlastAggressorSeatNum=${handData?.lastAggressorSeatNum ?? 'null'}\nroundStartSeatNum=${handData?.roundStartSeatNum ?? 'null'}\ntoCallCents=${handData?.toCallCents ?? 'null'}\nminRaiseCents=${handData?.minRaiseCents ?? 'null'}\ndeckIndex=${handData?.deckIndex ?? 'null'}\nboard=${JSON.stringify(handData?.board || [])}\nfolded=${folded}\nactiveSeatCount=${seatData.filter(s => s.active).length}`;
+    }
+  </script>
+  <script type="module">
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
+    import { getFirestore, doc, getDoc } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { auth, awaitAuthReady } from "/auth.js";
+
+    const params = new URLSearchParams(location.search);
+    const tableId = params.get('id');
+    const db = getFirestore();
+    const fns = getFunctions();
+
+    await awaitAuthReady();
+    const uid = auth.currentUser?.uid || null;
+
+    if (tableId && uid) {
+      const tSnap = await getDoc(doc(db, `tables/${tableId}`));
+      const isAdmin = tSnap.exists() && tSnap.data()?.createdByUid === uid;
+      const btn = document.getElementById('btn-next-street');
+      if (isAdmin && btn) {
+        btn.style.display = '';
+        btn.addEventListener('click', async () => {
+          try {
+            await httpsCallable(fns, 'forceAdvanceStreet')({ tableId });
+            if (window.jamlog) window.jamlog.push('admin.forceNextStreet.ok');
+          } catch (e) {
+            console.error(e);
+            if (window.jamlog) window.jamlog.push('admin.forceNextStreet.fail', { message: String(e?.message || e) });
+            alert('Failed to advance street');
+          }
+        });
+      }
     }
   </script>
 </body>
