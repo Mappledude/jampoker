@@ -6,6 +6,8 @@ import {
   orderBy,
   limit,
   onSnapshot,
+  updateDoc,
+  serverTimestamp,
 } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
@@ -21,28 +23,35 @@ export function startActionWorker(tableId: string) {
     limit(1)
   );
 
-  if (window.jamlog) window.jamlog.push('worker.start', { tableId });
-
   return onSnapshot(
     q,
     async (snap) => {
-      if (snap.empty) return;
       for (const docSnap of snap.docs) {
-        const actionId = docSnap.id;
+        const actionRef = docSnap.ref;
+
         try {
-          await takeActionTX({ tableId, actionId });
-          if (window.jamlog) window.jamlog.push('worker.cf.ok', { tableId, actionId });
-        } catch (err) {
-          const code = err?.code || 'unknown';
-          const message = err?.message || String(err);
-          console.error('worker.cf.error', { tableId, actionId, code, message });
-          if (window.jamlog) window.jamlog.push('worker.cf.error', { tableId, actionId, code, message });
+          await takeActionTX({ tableId, actionId: docSnap.id });
+          // NOTE: CF already marks applied:true. Leaving this no-op.
+          // If you prefer the worker to mark too (and you loosen rules), uncomment:
+          // await updateDoc(actionRef, { applied: true, appliedAt: serverTimestamp() });
+        } catch (err: any) {
+          // If you loosen rules (see rules change below), you may mark invalid here:
+          try {
+            await updateDoc(actionRef, {
+              applied: true,
+              invalid: true,
+              reason: err?.code || String(err),
+              appliedAt: serverTimestamp(),
+            });
+          } catch {
+            // ignore (rules may block client updates)
+          }
+          console.error('worker.apply.error', { tableId, actionId: docSnap.id, code: err?.code, message: err?.message });
         }
       }
     },
     (err) => {
       console.error('srv.action.listener_error', { code: err.code, message: err.message });
-      if (window.jamlog) window.jamlog.push('worker.sub.error', { code: err.code, message: err.message });
     }
   );
 }
