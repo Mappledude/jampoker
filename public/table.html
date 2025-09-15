@@ -73,26 +73,66 @@
         return Number.isFinite(num) ? num : null;
       };
 
-      const buildHandLogSnapshot = (state) => {
+      const toHandNumber = (value) => {
+        if (typeof value === 'number' && Number.isInteger(value)) return value;
+        if (typeof value === 'string' && /^\d+$/.test(value)) return Number(value);
+        return null;
+      };
+
+      const buildHandStatePayload = (state) => {
         const safe = state || {};
+        const rawCommits = safe.commits && typeof safe.commits === 'object' ? safe.commits : null;
+        const commitKeys = rawCommits ? Object.keys(rawCommits).sort((a, b) => Number(a) - Number(b)) : [];
         const commits = {};
-        if (safe.commits && typeof safe.commits === 'object') {
-          Object.keys(safe.commits).forEach((key) => {
-            const value = safe.commits[key];
-            const num = toCents(value);
-            if (Number.isFinite(num)) commits[key] = num;
-          });
-        }
-        const potFromCommits = Object.values(commits).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
-        const bet = toCents(safe.betToMatchCents);
-        const pot = toCents(safe.potCents);
+        commitKeys.forEach((key) => {
+          const cents = toCents(rawCommits[key]);
+          if (cents !== null) commits[key] = cents;
+        });
+        const commitValues = Object.values(commits);
+        const potFromCommits = commitValues.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+        const betToMatchCents = toCents(safe.betToMatchCents);
+        let potCents = toCents(safe.potCents);
+        if (potCents === null && commitValues.length > 0) potCents = potFromCommits;
         return {
-          handNo: safe.handNo ?? null,
+          handNo: toHandNumber(safe.handNo ?? null),
           street: safe.street ?? null,
           toActSeat: toSeatNumber(safe.toActSeat ?? null),
-          betToMatchCents: bet,
-          potCents: pot ?? potFromCommits,
-          commits,
+          betToMatchCents: betToMatchCents ?? null,
+          potCents: potCents ?? null,
+          commits: commitValues.length > 0 ? commits : {},
+          lastAggressorSeat: toSeatNumber(safe.lastAggressorSeat ?? null),
+          lastRaiseSizeCents: toCents(safe.lastRaiseSizeCents ?? null),
+          lastRaiseToCents: toCents(safe.lastRaiseToCents ?? null),
+        };
+      };
+
+      const deriveHandContext = (snapshot) => {
+        const base = snapshot || {};
+        const commits = base.commits && typeof base.commits === 'object' ? base.commits : {};
+        const current = getCurrentPlayer();
+        const seatEntry = current ? seatData.find((s) => s.occupiedBy === current.id) : null;
+        const mySeat = toSeatNumber(seatEntry?.seatIndex ?? null);
+        let myCommit = null;
+        if (mySeat !== null && Object.prototype.hasOwnProperty.call(commits, String(mySeat))) {
+          const commitValue = commits[String(mySeat)];
+          const cents = toCents(commitValue);
+          if (cents !== null) myCommit = cents;
+        }
+        let potCents = base.potCents ?? null;
+        if ((potCents === null || !Number.isFinite(potCents)) && commits) {
+          const values = Object.values(commits);
+          if (values.length > 0) {
+            potCents = values.reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+          }
+        }
+        return {
+          toMatch: base.betToMatchCents ?? null,
+          myCommit: myCommit ?? null,
+          potCents: potCents ?? null,
+          mySeat,
+          toActSeat: base.toActSeat ?? null,
+          street: base.street ?? null,
+          handNo: base.handNo ?? null,
         };
       };
 
@@ -281,42 +321,20 @@
     const tableRef = tableId ? doc(db, 'tables', tableId) : null;
     const handRef = tableId ? doc(db, handDocPath(tableId)) : null;
 
-    function buildHandStateChangePayload(state) {
-      const snapshot = buildHandLogSnapshot(state);
-      const commits = snapshot.commits && Object.keys(snapshot.commits).length ? snapshot.commits : null;
-      const currentPlayer = getCurrentPlayer();
-      const seatEntry = currentPlayer ? seatData.find((s) => s.occupiedBy === currentPlayer.id) : null;
-      const mySeat = toSeatNumber(seatEntry?.seatIndex ?? null);
-      const commitValue = commits && mySeat !== null ? commits[String(mySeat)] : null;
-      const myCommit = toCents(commitValue);
-      return {
-        handNo: snapshot.handNo ?? null,
-        street: snapshot.street ?? null,
-        toActSeat: snapshot.toActSeat ?? null,
-        betToMatchCents: snapshot.betToMatchCents ?? null,
-        potCents: snapshot.potCents ?? null,
-        commits,
-        lastAggressorSeat: toSeatNumber(state?.lastAggressorSeat ?? null),
-        lastRaiseSizeCents: toCents(state?.lastRaiseSizeCents ?? null),
-        lastRaiseToCents: toCents(state?.lastRaiseToCents ?? null),
-        derived: {
-          toMatch: snapshot.betToMatchCents ?? null,
-          myCommit: myCommit ?? null,
-          potCents: snapshot.potCents ?? null,
-          mySeat: mySeat ?? null,
-          toActSeat: snapshot.toActSeat ?? null,
-          street: snapshot.street ?? null,
-          handNo: snapshot.handNo ?? null,
-        },
-      };
-    }
-
     function pushHandStateChanged(state) {
-      const payload = buildHandStateChangePayload(state);
+      const payload = buildHandStatePayload(state);
+      const derived = deriveHandContext(payload);
+      if (window.jamlog) {
+        window.jamlog.hand = {
+          snapshot: { ...payload, commits: { ...payload.commits } },
+          derived: { ...derived },
+        };
+      }
       const key = JSON.stringify(payload);
-      if (lastHandStateLogKey === key) return;
+      if (lastHandStateLogKey === key) return payload;
       lastHandStateLogKey = key;
       if (window.jamlog) window.jamlog.push('hand.state.changed', payload);
+      return payload;
     }
 
     function subscribeHandState(tableId, onChange) {
@@ -343,7 +361,7 @@
             handState.sbSeat = toSeatNumber(handState?.sbSeat);
             handState.bbSeat = toSeatNumber(handState?.bbSeat);
             handState.dealerSeat = toSeatNumber(handState?.dealerSeat);
-            pushHandStateChanged(handState);
+            const handSnapshotPayload = pushHandStateChanged(handState);
             noHandBanner.style.display = 'none';
             if (pending) {
               pending = null;
@@ -353,10 +371,8 @@
             renderPlayerBoard();
             if (window.jamlog) {
               window.jamlog.push('hand.state.sub.ok', {
-                ...buildHandLogSnapshot(handState),
-                lastAggressorSeat: toSeatNumber(handState?.lastAggressorSeat ?? null),
-                lastRaiseSizeCents: toCents(handState?.lastRaiseSizeCents ?? null),
-                lastRaiseToCents: toCents(handState?.lastRaiseToCents ?? null),
+                ...handSnapshotPayload,
+                commits: { ...handSnapshotPayload.commits },
               });
             }
           } else {
@@ -764,21 +780,20 @@
         const current = getCurrentPlayer();
         mySeatIndex = seatData.find(s => s.occupiedBy === current?.id)?.seatIndex ?? null;
         if (!current || mySeatIndex == null) { boardEl.style.display = 'none'; return; }
-        const myCommit = handState ? commitOf(handState, mySeatIndex) : 0;
-        const toMatch = handState?.betToMatchCents ?? 0;
+        const snapshotForLog = buildHandStatePayload(handState);
+        const derived = deriveHandContext(snapshotForLog);
+        const toMatch = typeof derived.toMatch === 'number' ? derived.toMatch : 0;
+        const myCommit = typeof derived.myCommit === 'number' ? derived.myCommit : 0;
         const owe = Math.max(0, toMatch - myCommit);
-        const snapshotForLog = buildHandLogSnapshot(handState);
         if (window.jamlog) window.jamlog.push('turn.snapshot', {
           ...snapshotForLog,
+          commits: { ...snapshotForLog.commits },
           myUid: current?.id || null,
           mySeat: mySeatIndex,
-          toActSeat: toSeatNumber(handState?.toActSeat),
+          toActSeat: snapshotForLog.toActSeat ?? null,
           seats: seatData.map((s, i) => ({ i, seat: toSeatNumber(s?.seatIndex ?? i), uid: s?.occupiedBy || null })),
-          street: handState?.street || null,
-          handNo: handState?.handNo || null,
-          betToMatchCents: snapshotForLog.betToMatchCents,
-          potCents: snapshotForLog.potCents,
-          commits: snapshotForLog.commits,
+          street: derived.street ?? snapshotForLog.street ?? null,
+          handNo: derived.handNo ?? snapshotForLog.handNo ?? null,
         });
         boardEl.style.display = 'block';
         boardEl.innerHTML = `
@@ -813,11 +828,12 @@
           reason,
           myUid: current?.id || null,
           mySeat: mySeatIndex,
-          toActSeat: handState?.toActSeat ?? null,
+          toActSeat: snapshotForLog.toActSeat ?? null,
           toMatch,
           myCommit,
           owe,
-          street: handState?.street,
+          street: derived.street ?? snapshotForLog.street ?? null,
+          handNo: derived.handNo ?? snapshotForLog.handNo ?? null,
         });
         leaveBtn.addEventListener('click', () => leaveSeat(mySeatIndex));
         if (enable) {
