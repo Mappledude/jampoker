@@ -28,7 +28,7 @@ jobs:
         run: npm install -g firebase-tools
 
       - name: Install Functions dependencies
-        run: npm --prefix functions install
+        run: npm --prefix functions ci
 
       - name: Build Cloud Functions
         run: npm --prefix functions run build
@@ -39,4 +39,102 @@ jobs:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
 
       - name: Deploy Functions and Hosting to production
-        run: firebase deploy --only functions,hosting --project "$PROJECT_ID" --non-interactive --force
+        run: firebase deploy --only functions,hosting --project "$PROJECT_ID" --non-interactive --force --json | tee deploy.log
+
+      - name: Summarize Cloud Functions deployment
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const logPath = 'deploy.log';
+          if (!fs.existsSync(logPath)) {
+            console.log('deploy.log not found.');
+            process.exit(0);
+          }
+
+          const lines = fs.readFileSync(logPath, 'utf8').trim().split(/\r?\n/).reverse();
+          const jsonLine = lines.find((line) => {
+            const trimmed = line.trim();
+            return trimmed.startsWith('{') && trimmed.endsWith('}');
+          });
+
+          if (!jsonLine) {
+            console.log('No JSON output found in deploy.log.');
+            process.exit(0);
+          }
+
+          let payload;
+          try {
+            payload = JSON.parse(jsonLine);
+          } catch (error) {
+            console.error('Failed to parse deploy.log JSON output.');
+            console.error(error);
+            process.exit(1);
+          }
+
+          const operations = [];
+          const collect = (value) => {
+            if (!value) {
+              return;
+            }
+            if (Array.isArray(value)) {
+              value.forEach(collect);
+              return;
+            }
+            if (typeof value === 'object') {
+              const hasOperation =
+                typeof value.operationType === 'string' || typeof value.type === 'string';
+              const hasName = ['id', 'functionName', 'name', 'resource'].some(
+                (key) => typeof value[key] === 'string' && value[key]
+              );
+              if (hasOperation && hasName) {
+                operations.push(value);
+              }
+              Object.values(value).forEach(collect);
+            }
+          };
+
+          collect(payload);
+
+          const buckets = {
+            added: [],
+            updated: [],
+            deleted: [],
+          };
+
+          const extractName = (entry) => {
+            if (typeof entry.id === 'string' && entry.id) {
+              return entry.id;
+            }
+            const candidateKey = ['functionName', 'name', 'resource'].find(
+              (key) => typeof entry[key] === 'string' && entry[key]
+            );
+            if (candidateKey) {
+              const parts = entry[candidateKey].split('/');
+              return parts[parts.length - 1] || entry[candidateKey];
+            }
+            return 'unknown';
+          };
+
+          const mapOperation = (value) => {
+            const raw = String(value || '').toLowerCase();
+            if (raw.includes('create') || raw.includes('add')) {
+              return 'added';
+            }
+            if (raw.includes('delete') || raw.includes('remove')) {
+              return 'deleted';
+            }
+            return 'updated';
+          };
+
+          operations.forEach((entry) => {
+            const type = entry.operationType ?? entry.type;
+            const bucket = mapOperation(type);
+            buckets[bucket].push(extractName(entry));
+          });
+
+          const format = (items) => (items.length ? items.join(', ') : 'none');
+          console.log(`Functions added: ${format(buckets.added)}`);
+          console.log(`Functions updated: ${format(buckets.updated)}`);
+          console.log(`Functions deleted: ${format(buckets.deleted)}`);
+          NODE
