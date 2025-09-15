@@ -60,8 +60,18 @@ export function startActionWorker(tableId: string) {
           await updateDoc(actionRef, {
             applied: true,
             invalid: true,
-            reason: err?.code || String(err),
+            reason: err?.code || err?.message || 'server-error',
             appliedAt: serverTimestamp(),
+          });
+          console.debug('worker.apply.fail.markedInvalid', {
+            tableId,
+            actionId: docSnap.id,
+            reason: err?.code || err?.message || 'server-error',
+          });
+          pushJamlog('worker.apply.fail.markedInvalid', {
+            tableId,
+            actionId: docSnap.id,
+            reason: err?.code || err?.message || 'server-error',
           });
         }
       }
