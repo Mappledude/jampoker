@@ -24,8 +24,7 @@
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
-    import { isDebug } from "/common.js";
-    if (window.jamlog && isDebug()) {
+    if (window.jamlog) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'GLOBAL' });
     }
   </script>

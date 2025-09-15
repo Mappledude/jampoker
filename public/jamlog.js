@@ -1,52 +1,307 @@
 (function(){
-  const maxEvents = 300;
-  const buffer = [];
-  const listeners = [];
-  const meta = { projectId: '', build: 'dev', page: 'GLOBAL', uid: null, tableId: null, ua: navigator.userAgent, url: location.href };
-  let active = false;
+  const MAX_EVENTS = 2000;
+  const SIGNIFICANT_TYPES = new Set([
+    'turn.snapshot',
+    'hand.state.sub.ok',
+    'hand.state.changed'
+  ]);
 
-  function isDebug(){
-    const params = new URLSearchParams(location.search);
-    return params.get('debug') === '1' || localStorage.getItem('debug') === '1';
+  const bufferStore = {
+    items: new Array(MAX_EVENTS),
+    start: 0,
+    length: 0,
+  };
+
+  const listeners = [];
+  const handSnapshots = new Map();
+
+  const meta = {
+    projectId: '',
+    build: 'dev',
+    page: 'GLOBAL',
+    uid: null,
+    tableId: null,
+    userAgent: navigator.userAgent,
+    url: location.href,
+  };
+
+  let initialized = false;
+  let panel, logBody, headerEl;
+
+  function getDefaultTableId(){
+    try {
+      const params = new URLSearchParams(location.search);
+      const id = params.get('id');
+      return id || null;
+    } catch (err) {
+      console.warn('[jamlog] failed to derive tableId from URL', err);
+      return null;
+    }
   }
 
-  function sanitizeCtx(ctx){
-    if (!ctx || typeof ctx !== 'object') return ctx;
+  meta.tableId = getDefaultTableId();
+
+  function isDebug(){
+    try {
+      const params = new URLSearchParams(location.search);
+      return params.get('debug') === '1' || localStorage.getItem('debug') === '1';
+    } catch (err) {
+      return false;
+    }
+  }
+
+  function toNumber(val){
+    if (val === null || val === undefined) return null;
+    const num = typeof val === 'number' ? val : Number(val);
+    return Number.isFinite(num) ? num : null;
+  }
+
+  function toSeatNumber(val){
+    if (val === null || val === undefined) return null;
+    if (typeof val === 'number' && Number.isInteger(val)) return val;
+    if (typeof val === 'string' && /^-?\d+$/.test(val)) return Number(val);
+    return null;
+  }
+
+  function normalizeCommits(commits){
+    if (!commits || typeof commits !== 'object') return null;
     const out = {};
-    for (const k in ctx){
-      const v = ctx[k];
-      if (v === null || v === undefined) continue;
-      const t = Array.isArray(v) ? 'array' : typeof v;
-      out[k] = t === 'object' ? 'object' : t;
+    Object.keys(commits).sort().forEach((key) => {
+      const v = commits[key];
+      const num = toNumber(v);
+      if (num !== null) out[key] = num;
+    });
+    return Object.keys(out).length ? out : null;
+  }
+
+  function derivePot(commits, fallback){
+    if (typeof fallback === 'number' && Number.isFinite(fallback)) return fallback;
+    if (!commits) return fallback ?? null;
+    return Object.values(commits).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  }
+
+  function sanitizeContext(ctx){
+    if (ctx === undefined) return {};
+    if (ctx === null) return null;
+    if (typeof ctx !== 'object') return ctx;
+    const out = Array.isArray(ctx) ? [] : {};
+    const entries = Array.isArray(ctx) ? ctx.entries() : Object.entries(ctx);
+    for (const [key, value] of entries){
+      const targetKey = Array.isArray(ctx) ? key : key;
+      if (value === undefined) continue;
+      if (typeof value === 'function') continue;
+      if (value instanceof Date) {
+        if (Array.isArray(ctx)) out.push(value.toISOString());
+        else out[targetKey] = value.toISOString();
+        continue;
+      }
+      if (value && typeof value.toDate === 'function') {
+        try {
+          const iso = value.toDate().toISOString();
+          if (Array.isArray(ctx)) out.push(iso);
+          else out[targetKey] = iso;
+        } catch (err) {
+          continue;
+        }
+        continue;
+      }
+      if (typeof value === 'bigint') {
+        const safe = Number.isSafeInteger(Number(value)) ? Number(value) : value.toString();
+        if (Array.isArray(ctx)) out.push(safe);
+        else out[targetKey] = safe;
+        continue;
+      }
+      if (value && typeof value === 'object') {
+        try {
+          const json = JSON.parse(JSON.stringify(value));
+          if (Array.isArray(ctx)) out.push(json);
+          else out[targetKey] = json;
+        } catch (err) {
+          if (Array.isArray(ctx)) out.push(null);
+          else out[targetKey] = null;
+        }
+        continue;
+      }
+      if (Array.isArray(ctx)) out.push(value);
+      else out[targetKey] = value;
     }
     return out;
   }
 
-  function push(type, ctx){
-    if (!active) return;
-    const evt = { ts: new Date().toISOString(), page: meta.page || 'GLOBAL', type, uid: meta.uid, tableId: meta.tableId };
-    if (ctx) evt.ctx = ctx;
-    buffer.push(evt);
-    if (buffer.length > maxEvents) buffer.shift();
-    listeners.forEach(fn => fn(evt));
+  function extractHandSnapshot(ctx){
+    if (!ctx || typeof ctx !== 'object') return null;
+    const candidate = (ctx.handState && typeof ctx.handState === 'object')
+      ? ctx.handState
+      : (ctx.state && typeof ctx.state === 'object')
+        ? ctx.state
+        : ctx;
+    const commits = normalizeCommits(candidate.commits ?? ctx.commits ?? null);
+    const snapshot = {
+      handNo: candidate.handNo ?? ctx.handNo ?? null,
+      street: candidate.street ?? ctx.street ?? null,
+      toActSeat: toSeatNumber(candidate.toActSeat ?? ctx.toActSeat ?? null),
+      betToMatchCents: toNumber(candidate.betToMatchCents ?? ctx.betToMatchCents ?? null),
+      potCents: toNumber(candidate.potCents ?? ctx.potCents ?? null),
+      commits,
+    };
+    snapshot.potCents = derivePot(commits, snapshot.potCents);
+    const hasData = snapshot.handNo !== null || snapshot.street !== null || snapshot.toActSeat !== null ||
+      snapshot.betToMatchCents !== null || snapshot.potCents !== null || (snapshot.commits && Object.keys(snapshot.commits).length > 0);
+    return hasData ? snapshot : null;
   }
 
-  function init(opts){
-    if (active || !isDebug()) return;
-    active = true;
-    meta.projectId = opts.projectId || '';
-    meta.build = opts.build || 'dev';
-    meta.page = opts.page || 'GLOBAL';
-    if (opts.uid) meta.uid = opts.uid;
-    createButton();
-    push('app.start', { location: meta.url, ua: meta.ua });
+  function diffCommits(prev, next){
+    const changes = {};
+    const keys = new Set([
+      ...Object.keys(prev || {}),
+      ...Object.keys(next || {}),
+    ]);
+    let changed = false;
+    keys.forEach((key) => {
+      const before = toNumber(prev ? prev[key] : null);
+      const after = toNumber(next ? next[key] : null);
+      if (before !== after) {
+        changed = true;
+        changes[key] = { prev: before ?? null, next: after ?? null };
+      }
+    });
+    return { changed, changes };
+  }
+
+  function diffSnapshots(prev, next){
+    if (!prev) {
+      return { changed: true };
+    }
+    let changed = false;
+    const details = {};
+    ['handNo','street','toActSeat','betToMatchCents','potCents'].forEach((field) => {
+      const before = prev[field] ?? null;
+      const after = next[field] ?? null;
+      if (before !== after) {
+        changed = true;
+        details[field] = { prev: before, next: after };
+      }
+    });
+    const commitDiff = diffCommits(prev.commits, next.commits);
+    if (commitDiff.changed) {
+      changed = true;
+      details.commits = commitDiff.changes;
+    }
+    return { changed, details };
+  }
+
+  function addToBuffer(evt){
+    const index = (bufferStore.start + bufferStore.length) % MAX_EVENTS;
+    bufferStore.items[index] = evt;
+    if (bufferStore.length < MAX_EVENTS) {
+      bufferStore.length += 1;
+    } else {
+      bufferStore.start = (bufferStore.start + 1) % MAX_EVENTS;
+    }
+  }
+
+  function getEvents(){
+    const events = [];
+    for (let i = 0; i < bufferStore.length; i += 1) {
+      const idx = (bufferStore.start + i) % MAX_EVENTS;
+      const evt = bufferStore.items[idx];
+      if (evt) events.push(evt);
+    }
+    return events;
+  }
+
+  function clear(){
+    bufferStore.start = 0;
+    bufferStore.length = 0;
+    bufferStore.items.fill(undefined);
+    handSnapshots.clear();
+    if (logBody) logBody.innerHTML = '';
+  }
+
+  function onEvent(fn){
+    if (typeof fn !== 'function') return;
+    listeners.push(fn);
+  }
+
+  function notifyListeners(evt){
+    listeners.forEach((fn) => {
+      try { fn(evt); }
+      catch (err) { console.warn('[jamlog] listener error', err); }
+    });
+  }
+
+  function push(type, ctx){
+    const tsISO = new Date().toISOString();
+    const sanitizedCtx = sanitizeContext(ctx);
+    const event = {
+      tsISO,
+      ts: tsISO,
+      type,
+      page: meta.page || 'GLOBAL',
+      uid: meta.uid || null,
+      tableId: meta.tableId || getDefaultTableId(),
+      userAgent: meta.userAgent,
+      build: meta.build,
+      projectId: meta.projectId,
+      ctx: sanitizedCtx,
+    };
+    if (SIGNIFICANT_TYPES.has(type)) {
+      const snapshot = extractHandSnapshot(sanitizedCtx || {});
+      if (snapshot) {
+        const key = event.tableId || 'global';
+        const prev = handSnapshots.get(key);
+        const diff = diffSnapshots(prev, snapshot);
+        if (!diff.changed) {
+          if (event.ctx && typeof event.ctx === 'object') event.ctx.noop = true;
+        } else if (event.ctx && typeof event.ctx === 'object' && diff.details && Object.keys(diff.details).length) {
+          event.ctx.handDelta = diff.details;
+        }
+        handSnapshots.set(key, snapshot);
+      }
+    }
+    addToBuffer(event);
+    if (console && typeof console.debug === 'function') {
+      console.debug('[jamlog]', event);
+    }
+    if (logBody) appendRow(event);
+    notifyListeners(event);
+    return event;
+  }
+
+  function updateMeta(partial){
+    if (!partial || typeof partial !== 'object') return;
+    if (partial.projectId) meta.projectId = partial.projectId;
+    if (partial.build) meta.build = partial.build;
+    if (partial.page) meta.page = partial.page;
+    if (partial.uid !== undefined) meta.uid = partial.uid;
+    if (partial.tableId !== undefined && partial.tableId !== null) meta.tableId = partial.tableId;
+    if (partial.userAgent) meta.userAgent = partial.userAgent;
+    if (partial.url) meta.url = partial.url;
+  }
+
+  function init(opts = {}){
+    updateMeta({ url: location.href, userAgent: navigator.userAgent });
+    updateMeta(opts);
+    if (!meta.tableId) meta.tableId = getDefaultTableId();
+    const firstInit = !initialized;
+    initialized = true;
+    if (firstInit) {
+      if (isDebug()) createButton();
+      push('app.start', { location: meta.url, ua: meta.userAgent });
+    } else {
+      updateHeader();
+    }
+  }
+
+  function setUid(uid){
+    meta.uid = uid || null;
     updateHeader();
   }
 
-  function setUid(uid){ meta.uid = uid; updateHeader(); }
-  function setTableId(tid){ meta.tableId = tid; }
-  function getEvents(){ return buffer.slice(); }
-  function clear(){ buffer.length = 0; if (logBody) logBody.innerHTML = ''; }
+  function setTableId(tableId){
+    meta.tableId = tableId || getDefaultTableId();
+    updateHeader();
+  }
 
   function exportJSON(){
     return { meta: { ...meta, timestamp: new Date().toISOString() }, events: getEvents() };
@@ -61,69 +316,75 @@
       `- page: ${data.meta.page}`,
       `- url: ${data.meta.url}`,
       `- uid: ${data.meta.uid || 'none'}`,
-      `- userAgent: ${data.meta.ua}`,
+      `- userAgent: ${data.meta.userAgent}`,
       `- timestamp: ${data.meta.timestamp}`,
       '',
-      '## Recent Signals (last 30)'
+      `## Recent Signals (last ${Math.min(30, data.events.length)})`
     ];
     data.events.slice(-30).forEach(e => {
-      const snippet = e.ctx && (e.ctx.code || e.ctx.message) ? ` ${[e.ctx.code, e.ctx.message].filter(Boolean).join(' ')}` : '';
-      lines.push(`${e.ts} · ${e.type}${snippet}`);
+      const ctxStr = e.ctx ? ` ${JSON.stringify(e.ctx)}` : '';
+      lines.push(`${e.tsISO} · ${e.type}${ctxStr}`);
     });
-    lines.push('', '## Full Log (last 300)', '```json', JSON.stringify(data.events, null, 2), '```', '');
+    lines.push('', `## Full Log (last ${data.events.length})`, '```json', JSON.stringify(data.events, null, 2), '```', '');
     return lines.join('\n');
   }
 
-  function onEvent(fn){ listeners.push(fn); }
-
-  // ---- UI ----
-  let button, panel, logBody, headerEl;
+  let button;
   function createButton(){
+    if (button) return;
     button = document.createElement('div');
     button.textContent = '🐞 Debug';
-    button.style.position = 'fixed';
-    button.style.bottom = '10px';
-    button.style.right = '10px';
-    button.style.background = '#0ea5e9';
-    button.style.color = 'white';
-    button.style.padding = '6px 10px';
-    button.style.borderRadius = '8px';
-    button.style.fontSize = '14px';
-    button.style.cursor = 'pointer';
-    button.style.zIndex = '9999';
+    Object.assign(button.style, {
+      position: 'fixed',
+      bottom: '10px',
+      right: '10px',
+      background: '#0ea5e9',
+      color: 'white',
+      padding: '6px 10px',
+      borderRadius: '8px',
+      fontSize: '14px',
+      cursor: 'pointer',
+      zIndex: '9999',
+    });
     button.addEventListener('click', openPanel);
     document.body.appendChild(button);
   }
 
   function openPanel(){
-    if (panel) { panel.style.display = 'block'; return; }
+    if (panel) { panel.style.display = 'block'; updateHeader(); return; }
     panel = document.createElement('div');
-    panel.style.position = 'fixed';
-    panel.style.bottom = '0';
-    panel.style.right = '0';
-    panel.style.width = '360px';
-    panel.style.maxHeight = '70%';
-    panel.style.background = '#1f2937';
-    panel.style.color = '#f1f5f9';
-    panel.style.border = '1px solid #334155';
-    panel.style.borderRadius = '8px 0 0 0';
-    panel.style.display = 'flex';
-    panel.style.flexDirection = 'column';
-    panel.style.zIndex = '9999';
+    Object.assign(panel.style, {
+      position: 'fixed',
+      bottom: '0',
+      right: '0',
+      width: '360px',
+      maxHeight: '70%',
+      background: '#1f2937',
+      color: '#f1f5f9',
+      border: '1px solid #334155',
+      borderRadius: '8px 0 0 0',
+      display: 'flex',
+      flexDirection: 'column',
+      zIndex: '9999',
+    });
 
     const header = document.createElement('div');
-    header.style.padding = '8px';
-    header.style.borderBottom = '1px solid #334155';
-    header.style.display = 'flex';
-    header.style.flexDirection = 'column';
+    Object.assign(header.style, {
+      padding: '8px',
+      borderBottom: '1px solid #334155',
+      display: 'flex',
+      flexDirection: 'column',
+      gap: '6px',
+    });
+
     headerEl = document.createElement('div');
     headerEl.style.fontSize = '12px';
-    headerEl.style.marginBottom = '6px';
     header.appendChild(headerEl);
 
     const btnRow = document.createElement('div');
     btnRow.style.display = 'flex';
     btnRow.style.gap = '6px';
+
     const copyBtn = document.createElement('button');
     copyBtn.textContent = 'Copy Report';
     copyBtn.addEventListener('click', () => {
@@ -143,39 +404,244 @@
     const clrBtn = document.createElement('button');
     clrBtn.textContent = 'Clear';
     clrBtn.addEventListener('click', () => clear());
+
     btnRow.appendChild(copyBtn);
     btnRow.appendChild(dlBtn);
     btnRow.appendChild(clrBtn);
     header.appendChild(btnRow);
 
     logBody = document.createElement('div');
-    logBody.style.flex = '1';
-    logBody.style.overflowY = 'auto';
-    logBody.style.fontFamily = 'monospace';
-    logBody.style.fontSize = '11px';
-    logBody.style.padding = '8px';
+    Object.assign(logBody.style, {
+      flex: '1',
+      overflowY: 'auto',
+      fontFamily: 'monospace',
+      fontSize: '11px',
+      padding: '8px',
+    });
 
     panel.appendChild(header);
     panel.appendChild(logBody);
     document.body.appendChild(panel);
     getEvents().forEach(appendRow);
+    updateHeader();
   }
 
   function appendRow(evt){
-    if (!logBody) return;
+    if (!logBody || !evt) return;
     const line = document.createElement('div');
     const ctxStr = evt.ctx ? ' ' + JSON.stringify(evt.ctx) : '';
-    line.textContent = `${evt.ts} ${evt.type}${ctxStr}`;
+    line.textContent = `${evt.tsISO} ${evt.type}${ctxStr}`;
     logBody.appendChild(line);
     logBody.scrollTop = logBody.scrollHeight;
   }
 
   function updateHeader(){
     if (!headerEl) return;
-    headerEl.textContent = `projectId=${meta.projectId} build=${meta.build} page=${meta.page} uid=${meta.uid || 'none'}`;
+    headerEl.textContent = `projectId=${meta.projectId} build=${meta.build} page=${meta.page} uid=${meta.uid || 'none'} tableId=${meta.tableId || 'none'}`;
   }
 
   onEvent(appendRow);
 
-  window.jamlog = { init, push, exportJSON, exportMarkdown, clear, setUid, setTableId, onEvent, meta };
+  let firestorePromise = null;
+  async function getFirestore(){
+    if (!firestorePromise) {
+      firestorePromise = Promise.all([
+        import('/common.js'),
+        import('https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js'),
+      ]).then(([common, firestore]) => ({
+        db: common.db,
+        doc: firestore.doc,
+        getDoc: firestore.getDoc,
+        collection: firestore.collection,
+        query: firestore.query,
+        orderBy: firestore.orderBy,
+        limit: firestore.limit,
+        getDocs: firestore.getDocs,
+      })).catch((err) => {
+        console.warn('[jamlog] firestore load failed', err);
+        return null;
+      });
+    }
+    return firestorePromise;
+  }
+
+  function timestampToISO(value){
+    if (!value) return null;
+    if (typeof value === 'string') return value;
+    if (value instanceof Date) return value.toISOString();
+    if (typeof value === 'number') return new Date(value).toISOString();
+    if (value && typeof value.toDate === 'function') {
+      try { return value.toDate().toISOString(); }
+      catch (err) { return null; }
+    }
+    return null;
+  }
+
+  function buildHandLine(tableId, data){
+    if (!data) {
+      return { section: 'hand', tableId, error: 'not-found' };
+    }
+    const commits = normalizeCommits(data.commits || null);
+    return {
+      section: 'hand',
+      tableId,
+      handNo: data.handNo ?? null,
+      street: data.street ?? null,
+      toActSeat: toSeatNumber(data.toActSeat ?? null),
+      betToMatchCents: toNumber(data.betToMatchCents ?? null),
+      potCents: derivePot(commits, toNumber(data.potCents ?? null)),
+      commits: commits || {},
+      lastAggressorSeat: toSeatNumber(data.lastAggressorSeat ?? null),
+      lastRaiseSizeCents: toNumber(data.lastRaiseSizeCents ?? null),
+      lastRaiseToCents: toNumber(data.lastRaiseToCents ?? null),
+      updatedAtISO: timestampToISO(data.updatedAt ?? data.updatedAtISO ?? null),
+    };
+  }
+
+  async function fetchHandSnapshot(tableId){
+    const firestore = await getFirestore();
+    if (!firestore || !firestore.db || !tableId) {
+      return { section: 'hand', tableId: tableId || null, error: tableId ? 'firestore-unavailable' : 'missing-tableId' };
+    }
+    try {
+      const ref = firestore.doc(firestore.db, `tables/${tableId}/handState/current`);
+      const snap = await firestore.getDoc(ref);
+      return buildHandLine(tableId, snap.exists() ? snap.data() : null);
+    } catch (err) {
+      console.warn('[jamlog] failed to read hand state', err);
+      return { section: 'hand', tableId, error: err?.code || 'hand-read-failed', message: err?.message };
+    }
+  }
+
+  async function fetchRecentActions(tableId){
+    const firestore = await getFirestore();
+    if (!firestore || !firestore.db || !tableId) {
+      return { section: 'actions', tableId: tableId || null, items: [], error: tableId ? 'firestore-unavailable' : 'missing-tableId' };
+    }
+    try {
+      const ref = firestore.collection(firestore.db, `tables/${tableId}/actions`);
+      const q = firestore.query(ref, firestore.orderBy('createdAt', 'desc'), firestore.limit(10));
+      const snap = await firestore.getDocs(q);
+      const items = snap.docs.map((docSnap) => {
+        const data = docSnap.data() || {};
+        return {
+          id: docSnap.id,
+          createdAtISO: timestampToISO(data.createdAt ?? data.createdAtISO ?? null),
+          type: data.type ?? null,
+          seat: toSeatNumber(data.seat ?? null),
+          handNo: data.handNo ?? null,
+          amountCents: toNumber(data.amountCents ?? null),
+          createdByUid: data.createdByUid ?? null,
+          actorUid: data.actorUid ?? null,
+          applied: data.applied ?? null,
+          invalid: data.invalid ?? null,
+          reason: data.reason ?? null,
+        };
+      });
+      return { section: 'actions', tableId, items };
+    } catch (err) {
+      console.warn('[jamlog] failed to read recent actions', err);
+      return { section: 'actions', tableId, items: [], error: err?.code || 'actions-read-failed', message: err?.message };
+    }
+  }
+
+  function eventsForExport(raw){
+    const events = getEvents();
+    if (raw) return events;
+    return events.filter((evt) => !(evt?.ctx && typeof evt.ctx === 'object' && evt.ctx.noop === true));
+  }
+
+  function chunkPacket(baseLines, eventLines){
+    const MAX_SIZE = 400 * 1024;
+    const headerTemplate = '=== JAMPOKER DEBUG PACKET v2 BEGIN 1/1 ===';
+    const footerLine = '=== JAMPOKER DEBUG PACKET v2 END ===';
+
+    function linesSize(lines){
+      return lines.reduce((sum, line) => sum + line.length + 1, 0);
+    }
+
+    const baseSize = linesSize(baseLines) + headerTemplate.length + footerLine.length + 2;
+    const slices = [];
+    let current = [];
+    let currentSize = baseSize;
+
+    const flush = () => {
+      if (current.length === 0 && slices.length > 0) return;
+      slices.push(current);
+      current = [];
+      currentSize = baseSize;
+    };
+
+    if (eventLines.length === 0) {
+      slices.push([]);
+    } else {
+      eventLines.forEach((line) => {
+        const lineSize = line.length + 1;
+        if (current.length > 0 && currentSize + lineSize > MAX_SIZE) {
+          flush();
+        }
+        current.push(line);
+        currentSize += lineSize;
+      });
+      if (current.length > 0) flush();
+    }
+
+    const total = slices.length;
+    return slices.map((slice, index) => {
+      const header = `=== JAMPOKER DEBUG PACKET v2 BEGIN ${index + 1}/${total} ===`;
+      const lines = [header, ...baseLines, ...slice, footerLine];
+      return lines.join('\n');
+    });
+  }
+
+  async function exportPacket(options = {}){
+    const { raw = false } = options || {};
+    const tableId = meta.tableId || getDefaultTableId();
+    const tsISO = new Date().toISOString();
+    const metaLine = {
+      section: 'meta',
+      projectId: meta.projectId || window.__FIREBASE_PROJECT_ID__ || null,
+      build: meta.build,
+      page: meta.page,
+      url: meta.url || location.href,
+      userAgent: meta.userAgent,
+      uid: meta.uid || null,
+      tableId,
+      tsISO,
+    };
+
+    const [handLine, actionsLine] = await Promise.all([
+      fetchHandSnapshot(tableId),
+      fetchRecentActions(tableId),
+    ]);
+
+    const baseLines = [
+      JSON.stringify(metaLine),
+      JSON.stringify(handLine),
+      JSON.stringify(actionsLine),
+    ];
+
+    const eventLines = eventsForExport(raw).map((evt) => JSON.stringify({ section: 'event', ...evt }));
+    const chunks = chunkPacket(baseLines, eventLines);
+    return chunks.join('\n');
+  }
+
+  const jamlog = {
+    init,
+    push,
+    exportJSON,
+    exportMarkdown,
+    clear,
+    setUid,
+    setTableId,
+    onEvent,
+    meta,
+    export: exportPacket,
+  };
+
+  Object.defineProperty(jamlog, 'buffer', {
+    get: () => getEvents(),
+  });
+
+  window.jamlog = jamlog;
 })();

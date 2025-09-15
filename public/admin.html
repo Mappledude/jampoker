@@ -12,6 +12,7 @@
       <a href="/">Home</a>
       <a href="/lobby.html">Lobby</a>
       <a href="/admin.html">Admin</a>
+      <button id="admin-export-debug-btn" class="toolbar-btn" type="button" style="margin-left:auto;">Export Debug</button>
     </nav>
 
     <div id="you"></div>
@@ -112,6 +113,25 @@
       <textarea id="dbg-log" readonly style="width:100%;height:160px;padding:8px;box-sizing:border-box;background:#000;color:#0f0;border:none;outline:none;"></textarea>
     </div>
   </div>
+  <div id="admin-debug-export-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.85);z-index:10000;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;">
+    <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;max-width:720px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(15,23,42,0.6);">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #1e293b;gap:12px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:18px;">Export Debug Packet</h2>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-left:auto;">
+          <label class="small" style="display:flex;align-items:center;gap:6px;">
+            <input id="admin-debug-export-raw" type="checkbox" />
+            <span>Include noop events</span>
+          </label>
+          <button id="admin-debug-export-copy" type="button" style="padding:6px 12px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:600;cursor:pointer;">Copy</button>
+          <button id="admin-debug-export-close" type="button" style="padding:6px 12px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;cursor:pointer;">Close</button>
+        </div>
+      </div>
+      <div style="padding:12px 20px;">
+        <p id="admin-debug-export-status" class="small" style="margin:0 0 8px 0;color:#cbd5f5;"></p>
+        <textarea id="admin-debug-export-text" readonly style="width:100%;min-height:320px;max-height:55vh;background:#020617;color:#e2e8f0;border:1px solid #1e293b;border-radius:10px;padding:12px;font-family:monospace;font-size:12px;line-height:1.4;box-sizing:border-box;resize:vertical;"></textarea>
+      </div>
+    </div>
+  </div>
   <script>
     const dbg = (() => {
       const buf = [];
@@ -183,7 +203,7 @@
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
     import { app } from "/firebase-init.js";
-    import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls, isDebug } from "/common.js";
+    import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls } from "/common.js";
     import { startActionWorker } from "/adminWorker.js";
     import { startHand } from "/startHand.js";
       import {
@@ -194,9 +214,102 @@
     import { awaitAuthReady, isAuthed } from "/auth.js";
     import { logEvent } from "/js/debug.js";
 
-    if (window.jamlog && isDebug()) {
+    if (window.jamlog) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'ADMIN' });
     }
+
+    const adminExportBtn = document.getElementById('admin-export-debug-btn');
+    const adminExportModal = document.getElementById('admin-debug-export-modal');
+    const adminExportTextarea = document.getElementById('admin-debug-export-text');
+    const adminExportCopyBtn = document.getElementById('admin-debug-export-copy');
+    const adminExportCloseBtn = document.getElementById('admin-debug-export-close');
+    const adminExportStatus = document.getElementById('admin-debug-export-status');
+    const adminExportRawToggle = document.getElementById('admin-debug-export-raw');
+    let adminExportGeneration = 0;
+
+    const closeAdminExportModal = () => {
+      if (adminExportModal) adminExportModal.style.display = 'none';
+      adminExportGeneration += 1;
+    };
+
+    const logAdminPacketMarkers = (packet) => {
+      if (!packet) return;
+      packet.split('\n').forEach((line) => {
+        if (line.startsWith('=== JAMPOKER DEBUG PACKET v2 BEGIN')) console.log(line);
+        if (line === '=== JAMPOKER DEBUG PACKET v2 END ===') console.log(line);
+      });
+    };
+
+    const renderAdminExportPacket = async () => {
+      if (!adminExportStatus || !adminExportTextarea) return;
+      if (!window.jamlog || typeof window.jamlog.export !== 'function') {
+        adminExportStatus.textContent = 'jamlog unavailable on this page.';
+        adminExportTextarea.value = '';
+        return;
+      }
+      const raw = !!(adminExportRawToggle && adminExportRawToggle.checked);
+      const requestId = ++adminExportGeneration;
+      adminExportStatus.textContent = raw ? 'Generating packet (raw)…' : 'Generating packet…';
+      adminExportTextarea.value = '';
+      try {
+        const packet = await window.jamlog.export({ raw });
+        if (requestId !== adminExportGeneration) return;
+        adminExportTextarea.value = packet;
+        adminExportStatus.textContent = `Size: ${packet.length.toLocaleString()} chars${raw ? ' (raw)' : ''}`;
+        logAdminPacketMarkers(packet);
+      } catch (err) {
+        if (requestId !== adminExportGeneration) return;
+        console.error('Failed to export admin debug packet', err);
+        adminExportStatus.textContent = 'Export failed. Check console for details.';
+      }
+    };
+
+    if (adminExportBtn && adminExportModal) {
+      adminExportBtn.addEventListener('click', () => {
+        adminExportModal.style.display = 'flex';
+        adminExportModal.setAttribute('role', 'dialog');
+        adminExportModal.setAttribute('aria-modal', 'true');
+        renderAdminExportPacket();
+      });
+    }
+
+    if (adminExportRawToggle) {
+      adminExportRawToggle.addEventListener('change', () => {
+        renderAdminExportPacket();
+      });
+    }
+
+    if (adminExportCopyBtn && adminExportTextarea) {
+      adminExportCopyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(adminExportTextarea.value);
+          adminExportCopyBtn.textContent = 'Copied!';
+          setTimeout(() => { adminExportCopyBtn.textContent = 'Copy'; }, 1500);
+        } catch (err) {
+          console.error('Failed to copy admin debug packet', err);
+          adminExportCopyBtn.textContent = 'Copy failed';
+          setTimeout(() => { adminExportCopyBtn.textContent = 'Copy'; }, 1500);
+        }
+      });
+    }
+
+    if (adminExportCloseBtn) {
+      adminExportCloseBtn.addEventListener('click', () => {
+        closeAdminExportModal();
+      });
+    }
+
+    if (adminExportModal) {
+      adminExportModal.addEventListener('click', (event) => {
+        if (event.target === adminExportModal) closeAdminExportModal();
+      });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && adminExportModal && adminExportModal.style.display === 'flex') {
+        closeAdminExportModal();
+      }
+    });
 
     __adminDbg.setProj(window.__FIREBASE_PROJECT_ID__ || app.options.projectId);
     __adminDbg.push('app.start', { url: location.href });

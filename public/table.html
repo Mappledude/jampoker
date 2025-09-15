@@ -13,6 +13,7 @@
       <span style="font-weight:700;">JamPoker</span>
       <a href="/lobby.html">Lobby</a>
       <button id="chat-toggle" class="toolbar-btn" aria-pressed="false" style="margin-left:auto;margin-right:8px;">Chat</button>
+      <button id="export-debug-btn" class="toolbar-btn" type="button" style="margin-right:8px;">Export Debug</button>
       <span id="debug-chip" class="small" style="cursor:pointer;padding:4px 8px;border:1px solid #334155;border-radius:8px;">Debug: OFF</span>
     </nav>
     <div id="you"></div>
@@ -24,6 +25,25 @@
   <aside id="chat-panel" class="chat-panel card" style="position:fixed;right:16px;bottom:16px;"></aside>
   <div id="player-board" class="card player-board" style="display:none;position:fixed;left:50%;bottom:0;transform:translateX(-50%);min-width:260px;"></div>
   <div id="debug-box" class="dbg" style="display:none;font-family:monospace;white-space:pre;font-size:11px;margin-top:12px;"></div>
+  <div id="debug-export-modal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.85);z-index:10000;align-items:center;justify-content:center;padding:24px;box-sizing:border-box;">
+    <div style="background:#0f172a;border:1px solid #1e293b;border-radius:12px;max-width:720px;width:100%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(15,23,42,0.6);">
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #1e293b;gap:12px;flex-wrap:wrap;">
+        <h2 style="margin:0;font-size:18px;">Export Debug Packet</h2>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-left:auto;">
+          <label class="small" style="display:flex;align-items:center;gap:6px;">
+            <input id="debug-export-raw" type="checkbox" />
+            <span>Include noop events</span>
+          </label>
+          <button id="debug-export-copy" type="button" style="padding:6px 12px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-weight:600;cursor:pointer;">Copy</button>
+          <button id="debug-export-close" type="button" style="padding:6px 12px;border-radius:8px;border:1px solid #334155;background:#1e293b;color:#e2e8f0;cursor:pointer;">Close</button>
+        </div>
+      </div>
+      <div style="padding:12px 20px;">
+        <p id="debug-export-status" class="small" style="margin:0 0 8px 0;color:#cbd5f5;"></p>
+        <textarea id="debug-export-text" readonly style="width:100%;min-height:320px;max-height:55vh;background:#020617;color:#e2e8f0;border:1px solid #1e293b;border-radius:10px;padding:12px;font-family:monospace;font-size:12px;line-height:1.4;box-sizing:border-box;resize:vertical;"></textarea>
+      </div>
+    </div>
+  </div>
   <script src="/jamlog.js"></script>
   <script type="module" src="/firebase-init.js"></script>
   <script type="module">
@@ -47,7 +67,36 @@
         return null;
       };
 
-    if (window.jamlog && isDebug()) {
+      const toCents = (value) => {
+        if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+        const num = Number(value);
+        return Number.isFinite(num) ? num : null;
+      };
+
+      const buildHandLogSnapshot = (state) => {
+        const safe = state || {};
+        const commits = {};
+        if (safe.commits && typeof safe.commits === 'object') {
+          Object.keys(safe.commits).forEach((key) => {
+            const value = safe.commits[key];
+            const num = toCents(value);
+            if (Number.isFinite(num)) commits[key] = num;
+          });
+        }
+        const potFromCommits = Object.values(commits).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
+        const bet = toCents(safe.betToMatchCents);
+        const pot = toCents(safe.potCents);
+        return {
+          handNo: safe.handNo ?? null,
+          street: safe.street ?? null,
+          toActSeat: toSeatNumber(safe.toActSeat ?? null),
+          betToMatchCents: bet,
+          potCents: pot ?? potFromCommits,
+          commits,
+        };
+      };
+
+    if (window.jamlog) {
       window.jamlog.init({ projectId: app.options.projectId, build: window.__BUILD_SHA__ || 'dev', page: 'TABLE' });
     }
 
@@ -62,6 +111,99 @@
       chatOpen = !chatOpen;
       chatToggle.setAttribute('aria-pressed', chatOpen ? 'true' : 'false');
       chatPanel.classList.toggle('open', chatOpen);
+    });
+
+    const exportBtn = document.getElementById('export-debug-btn');
+    const exportModal = document.getElementById('debug-export-modal');
+    const exportTextarea = document.getElementById('debug-export-text');
+    const exportCopyBtn = document.getElementById('debug-export-copy');
+    const exportCloseBtn = document.getElementById('debug-export-close');
+    const exportStatus = document.getElementById('debug-export-status');
+    const exportRawToggle = document.getElementById('debug-export-raw');
+    let exportGeneration = 0;
+
+    const closeExportModal = () => {
+      if (exportModal) exportModal.style.display = 'none';
+      exportGeneration += 1;
+    };
+
+    const logPacketMarkers = (packet) => {
+      if (!packet) return;
+      packet.split('\n').forEach((line) => {
+        if (line.startsWith('=== JAMPOKER DEBUG PACKET v2 BEGIN')) console.log(line);
+        if (line === '=== JAMPOKER DEBUG PACKET v2 END ===') console.log(line);
+      });
+    };
+
+    const renderExportPacket = async () => {
+      if (!exportStatus || !exportTextarea) return;
+      if (!window.jamlog || typeof window.jamlog.export !== 'function') {
+        exportStatus.textContent = 'jamlog unavailable on this page.';
+        exportTextarea.value = '';
+        return;
+      }
+      const raw = !!(exportRawToggle && exportRawToggle.checked);
+      const requestId = ++exportGeneration;
+      exportStatus.textContent = raw ? 'Generating packet (raw)…' : 'Generating packet…';
+      exportTextarea.value = '';
+      try {
+        const packet = await window.jamlog.export({ raw });
+        if (requestId !== exportGeneration) return;
+        exportTextarea.value = packet;
+        exportStatus.textContent = `Size: ${packet.length.toLocaleString()} chars${raw ? ' (raw)' : ''}`;
+        logPacketMarkers(packet);
+      } catch (err) {
+        if (requestId !== exportGeneration) return;
+        console.error('Failed to export debug packet', err);
+        exportStatus.textContent = 'Export failed. Check console for details.';
+      }
+    };
+
+    if (exportBtn && exportModal) {
+      exportBtn.addEventListener('click', () => {
+        exportModal.style.display = 'flex';
+        exportModal.setAttribute('role', 'dialog');
+        exportModal.setAttribute('aria-modal', 'true');
+        renderExportPacket();
+      });
+    }
+
+    if (exportRawToggle) {
+      exportRawToggle.addEventListener('change', () => {
+        renderExportPacket();
+      });
+    }
+
+    if (exportCopyBtn && exportTextarea) {
+      exportCopyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(exportTextarea.value);
+          exportCopyBtn.textContent = 'Copied!';
+          setTimeout(() => { exportCopyBtn.textContent = 'Copy'; }, 1500);
+        } catch (err) {
+          console.error('Failed to copy debug packet', err);
+          exportCopyBtn.textContent = 'Copy failed';
+          setTimeout(() => { exportCopyBtn.textContent = 'Copy'; }, 1500);
+        }
+      });
+    }
+
+    if (exportCloseBtn) {
+      exportCloseBtn.addEventListener('click', () => {
+        closeExportModal();
+      });
+    }
+
+    if (exportModal) {
+      exportModal.addEventListener('click', (event) => {
+        if (event.target === exportModal) closeExportModal();
+      });
+    }
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && exportModal && exportModal.style.display === 'flex') {
+        closeExportModal();
+      }
     });
 
     const params = new URLSearchParams(window.location.search);
@@ -169,7 +311,14 @@
             }
             renderSeats();
             renderPlayerBoard();
-            if (window.jamlog) window.jamlog.push('hand.state.sub.ok', { handNo: handState?.handNo ?? 0 });
+            if (window.jamlog) {
+              window.jamlog.push('hand.state.sub.ok', {
+                ...buildHandLogSnapshot(handState),
+                lastAggressorSeat: toSeatNumber(handState?.lastAggressorSeat ?? null),
+                lastRaiseSizeCents: toCents(handState?.lastRaiseSizeCents ?? null),
+                lastRaiseToCents: toCents(handState?.lastRaiseToCents ?? null),
+              });
+            }
           } else {
             handState = null;
             if (pending) {
@@ -577,13 +726,18 @@
         const myCommit = handState ? commitOf(handState, mySeatIndex) : 0;
         const toMatch = handState?.betToMatchCents ?? 0;
         const owe = Math.max(0, toMatch - myCommit);
+        const snapshotForLog = buildHandLogSnapshot(handState);
         if (window.jamlog) window.jamlog.push('turn.snapshot', {
+          ...snapshotForLog,
           myUid: current?.id || null,
           mySeat: mySeatIndex,
           toActSeat: toSeatNumber(handState?.toActSeat),
           seats: seatData.map((s, i) => ({ i, seat: toSeatNumber(s?.seatIndex ?? i), uid: s?.occupiedBy || null })),
           street: handState?.street || null,
           handNo: handState?.handNo || null,
+          betToMatchCents: snapshotForLog.betToMatchCents,
+          potCents: snapshotForLog.potCents,
+          commits: snapshotForLog.commits,
         });
         boardEl.style.display = 'block';
         boardEl.innerHTML = `
