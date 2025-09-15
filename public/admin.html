@@ -206,6 +206,7 @@
     import { db, dollars, parseDollarsToCents, renderCurrentPlayerControls } from "/common.js";
     import { startActionWorker } from "/adminWorker.js";
     import { startHand } from "/startHand.js";
+    import { initAdminHud } from "/js/adminHud.js";
       import {
         collection, addDoc, serverTimestamp, query, orderBy, onSnapshot, where,
         doc, updateDoc, deleteDoc, setDoc, writeBatch, getDocs, getDoc
@@ -590,6 +591,30 @@
     const seatCounts = {};
     const seatUnsubs = {};
     const actionWorkers = {};
+    let hudSelectedTableId = null;
+    const adminHud = initAdminHud({
+      page: 'ADMIN',
+      jamlog: window.jamlog,
+      startWorker: (tableId) => {
+        if (!tableId) return false;
+        if (actionWorkers[tableId]) return false;
+        actionWorkers[tableId] = startActionWorker(tableId);
+        return true;
+      },
+      stopWorker: (tableId) => {
+        if (!tableId) return false;
+        const stop = actionWorkers[tableId];
+        if (!stop) return false;
+        stop();
+        delete actionWorkers[tableId];
+        return true;
+      },
+      getWorkerState: (tableId) => !!actionWorkers[tableId],
+    });
+    window.addEventListener('beforeunload', () => {
+      try { adminHud?.destroy?.(); }
+      catch (err) { console.warn('adminHud.destroy failed', err); }
+    }, { once: true });
     const renderTables = () => {
       const rows = Object.entries(tablesData)
         .sort((a, b) => (b[1].createdAt?.toMillis?.() || 0) - (a[1].createdAt?.toMillis?.() || 0))
@@ -603,7 +628,11 @@
           const rangeStr = `${dollars(minB)}–${dollars(maxB)} (${dollars(defB)})`;
           const seated = seatCounts[id] || 0;
           const ownerUid = d.createdByUid || null;
-          const ownerBadge = `<div class="small">Owner: ${ownerUid ? (auth.currentUser && ownerUid === auth.currentUser.uid ? 'you' : 'other') : '—'}</div>`;
+          const currentUid = auth.currentUser?.uid || null;
+          const isOwner = !!(currentUid && ownerUid === currentUid);
+          const ownerBadge = `<div class="small">Owner: ${ownerUid ? (isOwner ? 'you' : 'other') : '—'}</div>`;
+          const isSelected = hudSelectedTableId === id;
+          const hudBadge = isSelected ? `<div class="small" style="color:#38bdf8;">HUD active</div>` : '';
           const actions = [
             `<a href="/table.html?id=${id}" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0ea5e9;color:white;font-size:12px;text-decoration:none;">Open</a>`,
             `<button class="start-hand" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#3b82f6;color:white;font-size:12px;cursor:pointer;">Start Hand</button>`,
@@ -612,8 +641,12 @@
           if (!ownerUid && auth.currentUser) {
             actions.push(`<button class="set-admin" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#10b981;color:white;font-size:12px;cursor:pointer;">Set me as admin</button>`);
           }
-          return `<tr data-id="${id}">
-          <td style="padding:8px;border-bottom:1px solid #334155;"><div style="font-weight:600">${d.name || "(no name)"}</div><div class="small"><code>${id}</code></div>${ownerBadge}</td>
+          if (isOwner) {
+            actions.push(`<button class="open-hud" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0f172a;color:#e2e8f0;font-size:12px;cursor:pointer;">HUD</button>`);
+          }
+          const rowStyle = isSelected ? ' style="background:rgba(14,165,233,0.08);"' : '';
+          return `<tr data-id="${id}"${rowStyle}>
+          <td style="padding:8px;border-bottom:1px solid #334155;"><div style="font-weight:600">${d.name || "(no name)"}</div><div class="small"><code>${id}</code></div>${ownerBadge}${hudBadge}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${blindStr}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${rangeStr}</td>
           <td style="padding:8px;border-bottom:1px solid #334155;">${seated}</td>
@@ -624,6 +657,20 @@
         tablesBody.innerHTML = `<tr><td colspan="5" style="padding:8px;">No tables yet.</td></tr>`;
       } else {
         tablesBody.innerHTML = rows.join("");
+      }
+      const currentUid = auth.currentUser?.uid || null;
+      if (hudSelectedTableId && (!tablesData[hudSelectedTableId] || tablesData[hudSelectedTableId]?.createdByUid !== currentUid)) {
+        hudSelectedTableId = null;
+      }
+      if (!hudSelectedTableId) {
+        const ownedEntry = Object.entries(tablesData).find(([, data]) => currentUid && data?.createdByUid === currentUid);
+        hudSelectedTableId = ownedEntry ? ownedEntry[0] : null;
+      }
+      if (adminHud) {
+        const tableDataForHud = hudSelectedTableId ? tablesData[hudSelectedTableId] : null;
+        const tableName = tableDataForHud?.name || null;
+        const owns = !!(hudSelectedTableId && currentUid && tableDataForHud?.createdByUid === currentUid);
+        adminHud.setContext({ tableId: hudSelectedTableId, isOwner: owns, tableName, autoStart: false });
       }
     };
 
@@ -641,6 +688,7 @@
             delete seatCounts[id];
             if (actionWorkers[id]) actionWorkers[id]();
             delete actionWorkers[id];
+            if (hudSelectedTableId === id) hudSelectedTableId = null;
           } else {
             tablesData[id] = change.doc.data();
             if (!seatUnsubs[id]) {
@@ -712,16 +760,25 @@
         } finally {
           // keep disabled until listener updates UI
         }
-      } else if (target.classList.contains("set-admin")) {
-        try {
-          await updateDoc(doc(db, 'tables', id), { createdByUid: auth.currentUser.uid });
-          logEvent('admin.backfill.owner.ok', { tableId: id });
-          alert('Set as admin.');
-        } catch (err) {
-          alert('Error: ' + (err?.message || err));
+        } else if (target.classList.contains("set-admin")) {
+          try {
+            await updateDoc(doc(db, 'tables', id), { createdByUid: auth.currentUser.uid });
+            logEvent('admin.backfill.owner.ok', { tableId: id });
+            alert('Set as admin.');
+          } catch (err) {
+            alert('Error: ' + (err?.message || err));
+          }
+        } else if (target.classList.contains("open-hud")) {
+          const tableInfo = tablesData[id];
+          const uid = auth.currentUser?.uid || null;
+          if (!tableInfo || !uid || tableInfo.createdByUid !== uid) {
+            alert('Only the table owner can open the HUD.');
+            return;
+          }
+          hudSelectedTableId = id;
+          adminHud?.setContext({ tableId: id, isOwner: true, tableName: tableInfo?.name || null, autoStart: false });
         }
-      }
-    });
+      });
 
     // Render the “You” card
   </script>
