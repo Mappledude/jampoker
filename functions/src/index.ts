@@ -11,6 +11,7 @@ export { leaveSeatTX } from "./leaveSeatTX";
 export { onHandEndCleanup } from "./handEnd";
 export { pokerCall } from "./pokerCall";
 export { startHand } from "./startHand";
+export { startHandAndDeal } from "./startHandAndDeal";
 
 
 function getTableBlinds(table: any) {

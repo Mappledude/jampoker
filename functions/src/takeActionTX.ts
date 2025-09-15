@@ -502,7 +502,7 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     };
     if (telemetryPayloadForError) {
       console.error('takeActionTX.apply.error', {
-        ...telemetryPayloadForError,
+        ...(telemetryPayloadForError as Record<string, unknown>),
         error: errorPayload,
       });
     } else {

@@ -51,6 +51,7 @@
     import { startActionWorker } from "/adminWorker.js";
     import { initAdminHud } from "/js/adminHud.js";
     import { startHand } from "/startHand.js";
+    import { initAutoDeal } from "/js/autoDeal.js";
     import { db, dollars, formatCents, renderCurrentPlayerControls, isDebug, setDebug, getCurrentPlayer, formatCard, stageLabel, showSeatsDebug, debugLog } from "/common.js";
     import {
       doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
@@ -333,9 +334,19 @@
       const tSnap = await getDoc(doc(db, `tables/${tableId}`));
       const createdByUid = tSnap.exists() ? (tSnap.data()?.createdByUid || null) : null;
       const isAdmin = !!(createdByUid && createdByUid === u.uid);
+      isTableAdmin = isAdmin;
       if (isAdmin) {
         document.body.classList.add('is-table-admin');
         const tableSnapData = tSnap.exists() ? (tSnap.data() || null) : null;
+        if (!adminVariantInitialized && tableSnapData) {
+          const storedVariant = typeof tableSnapData.nextVariant === 'string'
+            ? tableSnapData.nextVariant
+            : typeof tableSnapData.nextVariantId === 'string'
+              ? tableSnapData.nextVariantId
+              : null;
+          if (storedVariant) adminVariant = normalizeVariant(storedVariant);
+        }
+        adminVariantInitialized = true;
         const tableName = tableSnapData && typeof tableSnapData.name === 'string' ? tableSnapData.name : null;
         tableHud = initAdminHud({
           page: 'TABLE',
@@ -367,6 +378,11 @@
             tableWorkerUnsub();
             tableWorkerUnsub = null;
           }
+          destroyAutoDeal();
+          if (holeSub) {
+            holeSub();
+            holeSub = null;
+          }
         }, { once: true });
         try {
           const { initAdvanceStreet } = await import('/js/advanceStreet.js');
@@ -379,6 +395,7 @@
       } else {
         if (window.jamlog) window.jamlog.push('worker.skip', { tableId, isAdmin: false });
       }
+      ensureAutoDeal();
     }
     document.body.classList.add('variant-v1');
     if (window.jamlog) window.jamlog.setTableId(tableId || null);
@@ -404,6 +421,11 @@
     let handState = null;
     let seatData = [];
     let mySeatIndex = null;
+    let myHoleCards = [];
+    let holeSub = null;
+    let holeSubSeat = null;
+    let holeSubHandNo = null;
+    let holeDataLoaded = false;
     const foldedSeats = new Set();
     let pending = null;
     let pendingTimer = null;
@@ -413,9 +435,113 @@
     let backfillTimer = null;
     let seatCountTimer = null;
     let seatCountDesync = false;
+    let isTableAdmin = false;
+    let autoDealController = null;
+    let adminVariant = 'holdem';
+    let adminVariantInitialized = false;
+    let autoDealCountdownEl = null;
+    let autoDealVariantSelect = null;
+    let autoDealCountdownMs = null;
     let lastHandStateLogKey = null;
     const tableRef = tableId ? doc(db, 'tables', tableId) : null;
     const handRef = tableId ? doc(db, handDocPath(tableId)) : null;
+
+    const normalizeVariant = (value) => (value === 'omaha' ? 'omaha' : 'holdem');
+
+    function updateAutoDealCountdown(ms) {
+      autoDealCountdownMs = typeof ms === 'number' ? ms : null;
+      if (!autoDealCountdownEl) return;
+      if (autoDealCountdownMs == null) {
+        autoDealCountdownEl.style.display = 'none';
+        autoDealCountdownEl.textContent = '';
+        return;
+      }
+      const seconds = Math.max(0, Math.ceil(autoDealCountdownMs / 1000));
+      autoDealCountdownEl.style.display = '';
+      autoDealCountdownEl.textContent = `Dealing in ${seconds}…`;
+    }
+
+    function ensureAutoDeal() {
+      if (!tableId || !isTableAdmin) {
+        if (autoDealController) {
+          autoDealController.destroy();
+          autoDealController = null;
+        }
+        updateAutoDealCountdown(null);
+        return;
+      }
+      if (!autoDealController) {
+        autoDealController = initAutoDeal({
+          tableId,
+          initialVariant: adminVariant,
+          onTick: updateAutoDealCountdown,
+        });
+      } else {
+        autoDealController.setVariant(adminVariant);
+      }
+    }
+
+    function destroyAutoDeal() {
+      if (autoDealController) {
+        autoDealController.destroy();
+        autoDealController = null;
+      }
+      updateAutoDealCountdown(null);
+    }
+
+    function updateHoleSubscription() {
+      const seat = typeof mySeatIndex === 'number' ? mySeatIndex : null;
+      const handNo = handState && typeof handState.handNo === 'number' ? handState.handNo : null;
+
+      if (!tableId || seat == null || handNo == null) {
+        if (holeSub) {
+          holeSub();
+          holeSub = null;
+        }
+        holeSubSeat = null;
+        holeSubHandNo = null;
+        if (myHoleCards.length || holeDataLoaded) {
+          myHoleCards = [];
+          holeDataLoaded = false;
+          renderSeats();
+        }
+        return;
+      }
+
+      if (holeSub && holeSubSeat === seat && holeSubHandNo === handNo) return;
+
+      if (holeSub) {
+        holeSub();
+        holeSub = null;
+      }
+      holeSubSeat = seat;
+      holeSubHandNo = handNo;
+      myHoleCards = [];
+      holeDataLoaded = false;
+
+      const privateRef = doc(db, 'tables', tableId, 'hands', String(handNo), 'private', String(seat));
+      if (window.jamlog) window.jamlog.push('hole.sub.started', { handNo, seat });
+      holeSub = onSnapshot(privateRef, (snap) => {
+        if (!snap.exists()) {
+          if (myHoleCards.length || holeDataLoaded) {
+            myHoleCards = [];
+            holeDataLoaded = false;
+            renderSeats();
+          }
+          return;
+        }
+        const data = snap.data() || {};
+        const cards = Array.isArray(data.cards)
+          ? data.cards.filter((c) => typeof c === 'string')
+          : [];
+        myHoleCards = cards;
+        holeDataLoaded = true;
+        if (window.jamlog) window.jamlog.push('hole.sub.ok', { count: cards.length });
+        renderSeats();
+      }, (err) => {
+        console.error('hole cards listener error', err);
+      });
+    }
 
     function pushHandStateChanged(state) {
       const payload = buildHandStatePayload(state, seatData);
@@ -468,6 +594,7 @@
               pending = null;
               if (pendingTimer) clearTimeout(pendingTimer);
             }
+            updateHoleSubscription();
             renderSeats();
             renderPlayerBoard();
             if (window.jamlog) {
@@ -483,6 +610,7 @@
               pending = null;
               if (pendingTimer) clearTimeout(pendingTimer);
             }
+            updateHoleSubscription();
             renderSeats();
             renderPlayerBoard();
             noHandBanner.style.display = '';
@@ -535,6 +663,9 @@
               const seatIndex = toSeatNumber(data?.seatIndex ?? d.id);
               return { id: d.id, ...data, seatIndex };
             });
+            const currentPlayer = getCurrentPlayer();
+            mySeatIndex = seatData.find((s) => s.occupiedBy === currentPlayer?.id)?.seatIndex ?? null;
+            updateHoleSubscription();
             showSeatsDebug(tableId, snap.docs);
             renderSeats();
             renderHand();
@@ -594,6 +725,14 @@
       }
     }
 
+    window.addEventListener('beforeunload', () => {
+      destroyAutoDeal();
+      if (holeSub) {
+        holeSub();
+        holeSub = null;
+      }
+    }, { once: true });
+
     function checkSeatCount() {
       if (!tableData) return;
       const derived = seatData.filter(s => s.occupiedBy).length;
@@ -634,7 +773,26 @@
       const activeSeatCount = t.activeSeatCount ?? 0;
       const desyncLine = seatCountDesync ? `<div class="small">Players seated: ${derivedSeatCount} (active: ${activeSeatCount})</div>` : '';
       const probeBtnHtml = isDebug() ? `<button id="btn-rules-probe" class="small" style="margin-left:8px;">Rules Probe</button>` : '';
-      const startBtnHtml = `<div id="start-hand-wrap" style="margin-top:8px;text-align:right;"><button id="btn-start-hand" class="small" data-action="start-hand">Start Hand</button>${probeBtnHtml}<div id="start-hand-hint" class="small" style="margin-top:4px;display:none;"></div></div>`;
+      const autoDealControls = !isTableAdmin ? '' : `
+        <div class="auto-deal-controls" style="display:flex;flex-direction:column;align-items:flex-end;gap:4px;margin-bottom:8px;">
+          <label class="small" style="display:flex;align-items:center;gap:8px;">
+            Dealer’s choice
+            <select id="dealer-choice-select" style="padding:4px 8px;border-radius:8px;border:1px solid #334155;background:#0b1220;color:#e5e7eb;">
+              <option value="holdem"${adminVariant === 'holdem' ? ' selected' : ''}>Hold'em</option>
+              <option value="omaha"${adminVariant === 'omaha' ? ' selected' : ''}>Omaha</option>
+            </select>
+          </label>
+          <div id="auto-deal-countdown" class="small" style="display:none;"></div>
+        </div>`;
+      const startBtnHtml = `
+        <div id="start-hand-wrap" style="margin-top:8px;text-align:right;">
+          ${autoDealControls}
+          <div style="display:flex;justify-content:flex-end;align-items:center;gap:8px;">
+            <button id="btn-start-hand" class="small" data-action="start-hand">Start Hand</button>
+            ${probeBtnHtml}
+          </div>
+          <div id="start-hand-hint" class="small" style="margin-top:4px;display:none;"></div>
+        </div>`;
       infoEl.innerHTML = `
         <h1>${t.name || '(no name)'}</h1>
         <div class="small">Blinds: ${blindStr}</div>
@@ -644,6 +802,18 @@
         ${startBtnHtml}
       `;
       document.getElementById('btn-rules-probe')?.addEventListener('click', () => rulesProbe(tableId));
+      autoDealVariantSelect = document.getElementById('dealer-choice-select');
+      autoDealCountdownEl = document.getElementById('auto-deal-countdown');
+      if (autoDealVariantSelect) {
+        autoDealVariantSelect.value = adminVariant;
+        autoDealVariantSelect.addEventListener('change', (event) => {
+          const nextValue = normalizeVariant(event.target.value);
+          adminVariant = nextValue;
+          if (autoDealController) autoDealController.setVariant(adminVariant);
+        });
+      }
+      if (autoDealController) autoDealController.setVariant(adminVariant);
+      if (autoDealCountdownEl) updateAutoDealCountdown(autoDealCountdownMs);
         const startBtn = document.getElementById('btn-start-hand');
         const hintEl = document.getElementById('start-hand-hint');
         startBtn.disabled = true;
@@ -740,6 +910,24 @@
         } else {
           seatEl.innerHTML = '<div class="small">Sit here</div>';
           seatEl.addEventListener('click', () => claimSeat(i));
+        }
+        if (seat && seat.occupiedBy && handState && handState.street) {
+          const variant = normalizeVariant(handState.variant);
+          const cardsPerSeat = variant === 'omaha' ? 4 : 2;
+          const cardsWrapper = document.createElement('div');
+          cardsWrapper.className = 'seat-cards';
+          let cardsHtml = '';
+          if (seat.seatIndex === mySeatIndex) {
+            if (myHoleCards.length > 0) {
+              cardsHtml = myHoleCards.map((card) => `<span class="card-chip card-face">${formatCard(card)}</span>`).join(' ');
+            } else {
+              cardsHtml = new Array(cardsPerSeat).fill('<span class="card-chip card-back">🂠</span>').join(' ');
+            }
+          } else {
+            cardsHtml = new Array(cardsPerSeat).fill('<span class="card-chip card-back">🂠</span>').join(' ');
+          }
+          cardsWrapper.innerHTML = cardsHtml;
+          seatEl.appendChild(cardsWrapper);
         }
         if (handState) {
           if (i === handState.dealerSeat) {
@@ -880,6 +1068,7 @@
       function renderPlayerBoard() {
         const current = getCurrentPlayer();
         mySeatIndex = seatData.find(s => s.occupiedBy === current?.id)?.seatIndex ?? null;
+        updateHoleSubscription();
         if (!current || mySeatIndex == null) { boardEl.style.display = 'none'; return; }
         const snapshotForLog = buildHandStatePayload(handState, seatData);
         const derived = deriveHandContext(snapshotForLog);
