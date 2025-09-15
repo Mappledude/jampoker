@@ -2,52 +2,37 @@ import { onCall, HttpsError, CallableRequest } from 'firebase-functions/v2/https
 import { FieldValue } from 'firebase-admin/firestore';
 import { db } from './admin';
 
-function nextActiveSeat(seats: any[], hand: any, start: number): number {
-  const total = seats.length;
+// ---- helpers ----
+const sum = (obj: Record<string, number>) =>
+  Object.values(obj || {}).reduce((m, v) => m + Number(v || 0), 0);
+
+function nextActiveSeat(seatDocs: any[], hand: any, start: number): number {
+  const total = 9;
   const folded = new Set((hand?.folded ?? []).map((n: any) => Number(n)));
   for (let i = 1; i <= total; i++) {
     const idx = (start + i) % total;
-    const seat = seats[idx];
-    if (seat?.uid && !folded.has(idx)) return idx;
+    const sd = seatDocs.find((d) => d?.seatIndex === idx);
+    const occupied = !!(sd?.occupiedBy || sd?.uid);
+    if (occupied && !folded.has(idx)) return idx;
   }
   return start;
 }
-
-function activeSeats(seats: any[], hand: any): number[] {
-  const folded = new Set((hand?.folded ?? []).map((n: any) => Number(n)));
-  return seats
-    .map((s: any, i: number) => (s?.uid && !folded.has(i) ? i : -1))
-    .filter((i: number) => i >= 0);
-}
-
-function sumCommits(commits: Record<string, number>): number {
-  return Object.values(commits || {}).reduce((m, v) => m + Number(v || 0), 0);
-}
-
-function streetStarter(seats: any[], hand: any): number {
+function streetStarter(hand: any, seatDocs: any[]) {
   if (hand.street === 'preflop') {
     const bb = typeof hand.bbSeat === 'number' ? hand.bbSeat : hand.dealerSeat;
-    return nextActiveSeat(seats, hand, bb);
+    return nextActiveSeat(seatDocs, hand, bb);
   }
-  return nextActiveSeat(seats, hand, hand.dealerSeat ?? 0);
+  return nextActiveSeat(seatDocs, hand, hand.dealerSeat ?? 0);
 }
-
-function nextStreet(street: string): string {
-  switch (street) {
-    case 'preflop':
-      return 'flop';
-    case 'flop':
-      return 'turn';
-    case 'turn':
-      return 'river';
-    default:
-      return 'showdown';
-  }
+function nextStreet(street: string) {
+  return street === 'preflop' ? 'flop'
+       : street === 'flop'    ? 'turn'
+       : street === 'turn'    ? 'river'
+       : 'showdown';
 }
-
-function advanceStreet(hand: any, seats: any[]) {
+function advanceStreet(hand: any, seatDocs: any[]) {
   const street = nextStreet(hand.street);
-  const toAct = street === 'showdown' ? null : streetStarter(seats, hand);
+  const toAct = street === 'showdown' ? null : streetStarter(hand, seatDocs);
   return {
     street,
     betToMatchCents: 0,
@@ -64,85 +49,84 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
   const handRef = db.doc(`tables/${tableId}/handState/current`);
   const tableRef = db.doc(`tables/${tableId}`);
   const actionRef = db.doc(`tables/${tableId}/actions/${actionId}`);
+  const seatsCol = tableRef.collection('seats');
 
   await db.runTransaction(async (tx) => {
-    const [actionSnap, handSnap, tableSnap] = await Promise.all([
-      tx.get(actionRef),
+    const [handSnap, tableSnap, actionSnap, seatsSnap] = await Promise.all([
       tx.get(handRef),
       tx.get(tableRef),
+      tx.get(actionRef),
+      tx.get(seatsCol), // read actual seat docs
     ]);
 
-    const action = actionSnap.data();
-    const hand = handSnap.data();
-    const table = tableSnap.data();
-    if (!action || !hand || !table)
-      throw new HttpsError('failed-precondition', 'missing-docs');
-    if (action.applied)
-      throw new HttpsError('failed-precondition', 'already-applied');
+    const hand = handSnap.data() as any;
+    const table = tableSnap.data() as any;
+    const action = actionSnap.data() as any;
+    if (!hand || !table || !action) throw new HttpsError('failed-precondition', 'missing-docs');
+    if (action.applied === true) return; // idempotent
 
-    const mySeat = action.seat;
-    if (hand.handNo !== action.handNo)
-      throw new HttpsError('aborted', 'stale-handno');
-    if (hand.toActSeat !== mySeat)
-      throw new HttpsError('failed-precondition', 'not-your-turn');
+    const seats: any[] = [];
+    seatsSnap.forEach((d) => seats.push({ id: d.id, ...d.data() }));
 
-    const seatUid = table.seats?.[mySeat]?.uid;
-    if (action.actorUid && seatUid && action.actorUid !== seatUid) {
-      throw new HttpsError('failed-precondition', 'seat-mismatch');
+    const seatIdx = Number(action.seat);
+    if (hand.toActSeat !== seatIdx) throw new HttpsError('failed-precondition', 'not-your-turn');
+
+    // Validate actor: accept either occupiedBy or uid on the seat doc
+    const seatDoc = seats.find((s) => s.seatIndex === seatIdx) || {};
+    const seatOccupant = seatDoc?.occupiedBy || seatDoc?.uid || null;
+    if (action.actorUid && seatOccupant && action.actorUid !== seatOccupant) {
+      throw new HttpsError('permission-denied', 'seat-mismatch');
     }
 
-    const kind = action.type;
-
     const commits: Record<string, number> = { ...(hand.commits ?? {}) };
-    const key = String(mySeat);
+    const key = String(seatIdx);
     const myCommit = commits[key] ?? 0;
-    const toMatch = hand.betToMatchCents ?? 0;
+    const toMatch = Number(hand.betToMatchCents ?? 0);
     const owe = Math.max(0, toMatch - myCommit);
 
-    const startSeat = streetStarter(table.seats, hand);
-    const nextSeat = nextActiveSeat(table.seats, hand, mySeat);
-    const actives = activeSeats(table.seats, hand);
+    const starter = streetStarter(hand, seats);
+    const nextSeat = nextActiveSeat(seats, hand, seatIdx);
+    const actives = seats
+      .filter((s) => !!(s?.occupiedBy || s?.uid))
+      .map((s) => s.seatIndex)
+      .sort((a, b) => a - b);
 
-    let updates: any = { updatedAt: FieldValue.serverTimestamp() };
+    let updates: any = {
+      updatedAt: FieldValue.serverTimestamp(),
+      lastActionId: actionId,
+    };
 
-    if (kind === 'call') {
-      if (mySeat !== hand.toActSeat) {
-        throw new HttpsError('failed-precondition', 'cannot-call');
-      }
-      if (owe <= 0) {
-        // treat as check when nothing owed
-        updates.potCents = sumCommits(commits);
-        if (nextSeat === startSeat) {
-          updates = { ...updates, ...advanceStreet(hand, table.seats) };
-        } else {
-          updates.toActSeat = nextSeat;
-        }
+    if (action.type === 'check') {
+      if (owe > 0) throw new HttpsError('failed-precondition', 'cannot-check');
+      const allMatched = actives.every((i) => (commits[String(i)] ?? 0) >= toMatch);
+      if (allMatched && nextSeat === starter) {
+        updates = { ...updates, ...advanceStreet(hand, seats), potCents: sum(commits) };
       } else {
+        updates = { ...updates, toActSeat: nextSeat, potCents: sum(commits) };
+      }
+    } else if (action.type === 'call') {
+      if (owe > 0) {
         commits[key] = myCommit + owe;
         updates.commits = commits;
-        updates.potCents = sumCommits(commits);
-        const allMatched = actives.every((s) => (commits[String(s)] ?? 0) >= toMatch);
-        if (allMatched && nextSeat === startSeat) {
-          updates = { ...updates, ...advanceStreet(hand, table.seats) };
-        } else {
-          updates.toActSeat = nextSeat;
-        }
       }
-    } else if (kind === 'check') {
-      if (owe > 0 || mySeat !== hand.toActSeat) {
-        throw new HttpsError('failed-precondition', 'cannot-check');
-      }
-      updates.potCents = sumCommits(commits);
-      if (nextSeat === startSeat) {
-        updates = { ...updates, ...advanceStreet(hand, table.seats) };
+      updates.potCents = sum(commits);
+      const allMatched = actives.every((i) => (commits[String(i)] ?? 0) >= toMatch);
+      if (allMatched && nextSeat === starter) {
+        updates = { ...updates, ...advanceStreet(hand, seats) };
       } else {
         updates.toActSeat = nextSeat;
       }
     } else {
-      throw new HttpsError('invalid-argument', 'bad-kind');
+      throw new HttpsError('invalid-argument', 'unsupported-in-02A');
     }
 
     tx.update(handRef, updates);
+    // Mark the action as applied from the server (reduces dependence on client/rules timing)
+    tx.update(actionRef, {
+      applied: true,
+      invalid: false,
+      appliedAt: FieldValue.serverTimestamp(),
+    });
   });
 });
 
