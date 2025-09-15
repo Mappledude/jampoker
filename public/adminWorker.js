@@ -1,15 +1,11 @@
 import {
   getFirestore,
-  doc,
   collection,
   query,
   where,
   orderBy,
   limit,
   onSnapshot,
-  serverTimestamp,
-  getDoc,
-  updateDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import {
   getFunctions,
@@ -28,64 +24,41 @@ export function startActionWorker(tableId) {
     limit(1)
   );
 
+  if (window.jamlog) window.jamlog.push('worker.start', { tableId });
+
   return onSnapshot(
     q,
     async (snap) => {
+      if (snap.empty) return;
+
       for (const docSnap of snap.docs) {
-        const a = docSnap.data();
-        const actionRef = docSnap.ref;
-        const hsRef = doc(db, `tables/${tableId}/handState/current`);
-        const hsSnap = await getDoc(hsRef);
-        const hs = hsSnap.data();
-        if (!hs || hs.toActSeat !== a.seat) {
-          await updateDoc(actionRef, {
-            applied: true,
-            invalid: true,
-            reason: 'not-your-turn',
-            appliedAt: serverTimestamp(),
-          });
-          continue;
-        }
-        const seatUid = hs?.seats?.[a.seat]?.uid;
-        if (a.actorUid && seatUid && a.actorUid !== seatUid) {
-          console.warn('worker.apply.warn', {
-            reason: 'seat-mismatch',
-            actionId: docSnap.id,
-            seat: a.seat,
-            actorUid: a.actorUid,
-            seatUid,
-          });
-        }
+        const actionId = docSnap.id;
+        
+        // Call the Cloud Function with { tableId, actionId }.
+        // The CF validates turn/actor, updates handState, and marks the action as applied.
         try {
-          await takeActionTX({
-            tableId,
-            action: {
-              handNo: a.handNo,
-              seat: a.seat,
-              type: a.type,
-              amountCents: a.amountCents ?? null,
-              actorUid: a.actorUid,
-              createdByUid: a.createdByUid,
-            },
-          });
-          await updateDoc(actionRef, {
-            applied: true,
-            appliedAt: serverTimestamp(),
-          });
-          console.log('worker.apply.ok', { id: docSnap.id, type: a.type, seat: a.seat });
+          await takeActionTX({ tableId, actionId });
+
+          if (window.jamlog) {
+            window.jamlog.push('worker.cf.ok', { tableId, actionId });
+          }
         } catch (err) {
-          console.error('worker.apply.error', { id: docSnap.id, err: String(err) });
-          await updateDoc(actionRef, {
-            applied: true,
-            invalid: true,
-            reason: 'server-error',
-            appliedAt: serverTimestamp(),
-          });
+          // Do NOT try to write to /actions here (rules disallow updates).
+          const code = err?.code || 'unknown';
+          const message = err?.message || String(err);
+          console.error('worker.cf.error', { tableId, actionId, code, message });
+          if (window.jamlog) {
+            window.jamlog.push('worker.cf.error', { tableId, actionId, code, message });
+          }
         }
       }
     },
     (err) => {
       console.error('srv.action.listener_error', { code: err.code, message: err.message });
+      if (window.jamlog) {
+        window.jamlog.push('worker.sub.error', { code: err.code, message: err.message });
+      }
     }
   );
 }
+

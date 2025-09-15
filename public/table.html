@@ -80,17 +80,19 @@
         btn.disabled = false;
       }
     });
-    auth.onAuthStateChanged((u) => {
-      if (!u) return;
-      if (!tableId) return;
-
-      getDoc(doc(db, `tables/${tableId}`))
-        .then((s) => {
-          const isAdmin = s.exists() && s.data()?.createdByUid === u.uid;
-      if (isAdmin) startActionWorker(tableId);
-        })
-        .catch((e) => console.error("host.check.error", e));
-    });
+    await awaitAuthReady();
+    const u = auth.currentUser;
+    if (u && tableId) {
+      const tSnap = await getDoc(doc(db, `tables/${tableId}`));
+      const createdByUid = tSnap.exists() ? (tSnap.data()?.createdByUid || null) : null;
+      const isAdmin = !!(createdByUid && createdByUid === u.uid);
+      if (isAdmin) {
+        if (window.jamlog) window.jamlog.push('worker.attach', { tableId, isAdmin: true });
+        startActionWorker(tableId);
+      } else {
+        if (window.jamlog) window.jamlog.push('worker.skip', { tableId, isAdmin: false });
+      }
+    }
     document.body.classList.add('variant-v1');
     if (window.jamlog) window.jamlog.setTableId(tableId || null);
     const errorEl = document.getElementById('error');
