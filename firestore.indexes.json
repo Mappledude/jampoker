@@ -7,8 +7,7 @@
         { "fieldPath": "active", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "DESCENDING" }
       ]
-    }
-    ,
+    },
     {
       "collectionGroup": "actions",
       "queryScope": "COLLECTION",

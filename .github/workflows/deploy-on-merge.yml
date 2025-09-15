@@ -57,8 +57,12 @@ jobs:
         with:
           credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
 
-      - name: Deploy Functions and Hosting to production
-        run: firebase deploy --only functions,hosting --project "$PROJECT_ID" --non-interactive --force --json | tee deploy.log
+      - name: Firebase deploy (functions + hosting + indexes)
+        run: |
+          npx firebase deploy --only firestore:indexes,functions,hosting --project $FIREBASE_PROJECT_ID --token "$FIREBASE_TOKEN" --non-interactive --force --json | tee deploy.log
+        env:
+          FIREBASE_PROJECT_ID: jam-poker
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Summarize Cloud Functions deployment
         shell: bash
