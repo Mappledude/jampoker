@@ -34,14 +34,18 @@ interface HandState {
   lastRaiseToCents?: number | null;
   folded?: number[]; // seat indices
   potCents?: number; // running total across streets
-  updatedAt?: Timestamp;
-  version?: number;
+  updatedAt?: Timestamp | FirebaseFirestore.FieldValue;
+  version?: number | FirebaseFirestore.FieldValue;
   lastActionId?: string | null;
   lastWriteBy?: string | null;
 }
 
+function sum(values: Array<number | null | undefined>): number {
+  return values.reduce<number>((total, value) => total + Number(value ?? 0), 0);
+}
+
 function sumCommits(commits: Record<string, number> | undefined): number {
-  return Object.values(commits || {}).reduce((m, v) => m + Number(v || 0), 0);
+  return sum(Object.values(commits || {}));
 }
 
 function buildSeatUids(seatDocs: FirebaseFirestore.QuerySnapshot<FirebaseFirestore.DocumentData>): (string | null)[] {
@@ -100,6 +104,7 @@ function nextStreet(street: Street): Street {
 
 export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
   const { tableId, actionId } = request.data || {};
+  console.log('takeActionTX.in', { tableId, actionId, now: Date.now() });
   if (!tableId || !actionId) {
     throw new HttpsError('invalid-argument', 'missing { tableId, actionId }');
   }
@@ -313,6 +318,20 @@ export const takeActionTX = onCall(async (request: CallableRequest<any>) => {
     }
 
     // Write hand updates
+    console.log('takeActionTX.apply', {
+      tableId, actionId,
+      type: action?.type, seat: action?.seat,
+      handNoBefore: hand?.handNo,
+      toActBefore: hand?.toActSeat,
+      betToMatchBefore: hand?.betToMatchCents,
+      potBefore: sumCommits(hand?.commits || {}),
+      updatesPreview: {
+        toActSeat: updates.toActSeat ?? null,
+        street: updates.street ?? hand?.street,
+        betToMatchCents: updates.betToMatchCents ?? hand?.betToMatchCents,
+        potCents: updates.potCents
+      }
+    });
     tx.update(handRef, updates);
 
     // Mark action applied here so worker doesn’t reprocess
