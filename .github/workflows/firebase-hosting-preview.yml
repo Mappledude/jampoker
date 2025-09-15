@@ -12,29 +12,32 @@ env:
   PROJECT_ID: jam-poker
 
 jobs:
-  hosting-preview:
-    if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "20"
-
-      - name: Install Firebase CLI
-        run: npm install -g firebase-tools
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_JAM_POKER }}
-
-      - name: Deploy preview channel
-        run: firebase hosting:channel:deploy pr-${{ github.event.number }} --project "$PROJECT_ID" --json
+  # Preview deployments are currently disabled. Remove the comments below to
+  # re-enable the job using the FIREBASE_SERVICE_ACCOUNT secret.
+  # hosting-preview:
+  #   if: ${{ github.event.pull_request.head.repo.full_name == github.repository }}
+  #   runs-on: ubuntu-latest
+  #   permissions:
+  #     contents: read
+  #     id-token: write
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #
+  #     - uses: actions/setup-node@v4
+  #       with:
+  #         node-version: "20"
+  #
+  #     - name: Install Firebase CLI
+  #       run: npm install -g firebase-tools
+  #
+  #     - name: Authenticate to Google Cloud
+  #       uses: google-github-actions/auth@v2
+  #       with:
+  #         projectId: jam-poker
+  #         credentials_json: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+  #
+  #     - name: Deploy preview channel
+  #       run: firebase hosting:channel:deploy pr-${{ github.event.number }} --project "$PROJECT_ID" --json
 
   skip-preview:
     if: ${{ github.event.pull_request.head.repo.full_name != github.repository }}

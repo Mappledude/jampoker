@@ -6,6 +6,9 @@
 - Functions (gen2, us-central1): **ping**, **onSeatsChanged**, **onVariantChosen**, **onHandEnded**
 - GitHub CI: deploys Functions + Hosting (+ rules) on merges to **main**
 
+## GitHub Actions Secrets
+- `FIREBASE_SERVICE_ACCOUNT`: Service account JSON (base64 encoded) used by the disabled Hosting preview workflow. Required if the preview job is re-enabled.
+
 ## Current Features
 - Lobby/Admin basic UI
 - Players + wallets (CRUD) — dev rules (no auth yet)
