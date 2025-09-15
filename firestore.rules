@@ -83,6 +83,11 @@ service cloud.firestore {
     match /tables/{tableId}/hands/{handId} {
       allow read: if true;
       allow write: if false;
+
+      match /private/{seatId} {
+        allow read: if request.auth != null && request.auth.uid == resource.data.uid;
+        allow write: if false;
+      }
     }
 
     match /tables/{tableId}/hands/{handId}/intents/{intentId} {

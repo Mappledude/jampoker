@@ -39,6 +39,29 @@ body.variant-v1 .community-card.enter {
   align-items: center;
 }
 
+.seat .seat-cards {
+  margin-top: 6px;
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+
+.seat .card-chip {
+  min-width: 36px;
+  text-align: center;
+}
+
+.card-back {
+  background: rgba(15, 23, 42, 0.7);
+  border-color: #1e293b;
+}
+
+.card-face {
+  background: rgba(14, 165, 233, 0.2);
+  border-color: #38bdf8;
+}
+
 .seat .pos-badge {
   position: absolute;
   top: -4px;
