@@ -56,6 +56,7 @@
       doc, setDoc, updateDoc, onSnapshot, collection, query, orderBy, serverTimestamp,
       writeBatch, runTransaction, increment, getDoc, addDoc
     } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
+    import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
     import { awaitAuthReady, auth } from "/auth.js";
       import { handDocPath } from "/js/dbPaths.js";
       import { logEvent } from "/js/debug.js";
@@ -279,6 +280,8 @@
 
     const params = new URLSearchParams(window.location.search);
     const tableId = params.get('id');
+    const fns = getFunctions(app);
+    const takeActionTX = httpsCallable(fns, 'takeActionTX');
     const controlsRoot = document.getElementById('table-controls') || document;
     controlsRoot.addEventListener('click', async (e) => {
       const btn = e.target.closest('[data-action="start-hand"]');
@@ -996,6 +999,16 @@
           amountCents: amount,
           actorUid,
         });
+      }
+      try {
+        if (window.jamlog) window.jamlog.push('worker.apply.start', { tableId, actionId: docRef.id });
+        await takeActionTX({ tableId, actionId: docRef.id });
+        if (window.jamlog) window.jamlog.push('worker.apply.ok', { tableId, actionId: docRef.id });
+      } catch (err) {
+        const code = err?.code || 'unknown';
+        const message = err?.message || String(err);
+        if (window.jamlog) window.jamlog.push('worker.apply.fail', { tableId, actionId: docRef.id, code, message });
+        throw err;
       }
       return docRef;
     }

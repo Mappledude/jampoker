@@ -13,7 +13,7 @@ export async function enqueueAction(
   handNo: number,
   actorUid: string,
   action: PlayerAction
-) {
+): Promise<string> {
   const ref = doc(collection(db, `tables/${tableId}/actions`));
   await setDoc(ref, {
     handNo,
@@ -25,4 +25,5 @@ export async function enqueueAction(
     clientTs: Date.now(),
     applied: false,
   });
+  return ref.id;
 }
