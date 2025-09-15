@@ -74,10 +74,19 @@
     return Object.keys(out).length ? out : null;
   }
 
-  function derivePot(commits, fallback){
-    if (typeof fallback === 'number' && Number.isFinite(fallback)) return fallback;
-    if (!commits) return fallback ?? null;
+  function sumCommitValues(commits){
+    if (!commits) return 0;
     return Object.values(commits).reduce((sum, v) => sum + (Number(v) || 0), 0);
+  }
+
+  function derivePot(commits, fallback){
+    const street = sumCommitValues(commits);
+    const hasFallback = typeof fallback === 'number' && Number.isFinite(fallback);
+    if (!hasFallback && street === 0 && (fallback === null || fallback === undefined)) {
+      return null;
+    }
+    const base = hasFallback ? Number(fallback) : 0;
+    return base + street;
   }
 
   function sanitizeContext(ctx){
@@ -136,15 +145,20 @@
         ? ctx.state
         : ctx;
     const commits = normalizeCommits(candidate.commits ?? ctx.commits ?? null);
+    const potBankedRaw = toNumber(candidate.potCents ?? ctx.potCents ?? null);
+    const potBankedCents = typeof potBankedRaw === 'number' && Number.isFinite(potBankedRaw) ? potBankedRaw : 0;
+    const streetPotCents = sumCommitValues(commits);
     const snapshot = {
       handNo: candidate.handNo ?? ctx.handNo ?? null,
       street: candidate.street ?? ctx.street ?? null,
       toActSeat: toSeatNumber(candidate.toActSeat ?? ctx.toActSeat ?? null),
       betToMatchCents: toNumber(candidate.betToMatchCents ?? ctx.betToMatchCents ?? null),
-      potCents: toNumber(candidate.potCents ?? ctx.potCents ?? null),
+      potCents: derivePot(commits, potBankedRaw),
+      potBankedCents,
+      potDisplayCents: potBankedCents + streetPotCents,
+      streetPotCents,
       commits,
     };
-    snapshot.potCents = derivePot(commits, snapshot.potCents);
     const hasData = snapshot.handNo !== null || snapshot.street !== null || snapshot.toActSeat !== null ||
       snapshot.betToMatchCents !== null || snapshot.potCents !== null || (snapshot.commits && Object.keys(snapshot.commits).length > 0);
     return hasData ? snapshot : null;
@@ -174,7 +188,7 @@
     }
     let changed = false;
     const details = {};
-    ['handNo','street','toActSeat','betToMatchCents','potCents'].forEach((field) => {
+    ['handNo','street','toActSeat','betToMatchCents','potCents','potBankedCents','potDisplayCents','streetPotCents'].forEach((field) => {
       const before = prev[field] ?? null;
       const after = next[field] ?? null;
       if (before !== after) {
@@ -482,6 +496,9 @@
       return { section: 'hand', tableId, error: 'not-found' };
     }
     const commits = normalizeCommits(data.commits || null);
+    const potBankedRaw = toNumber(data.potCents ?? null);
+    const potBankedCents = typeof potBankedRaw === 'number' && Number.isFinite(potBankedRaw) ? potBankedRaw : 0;
+    const streetPotCents = sumCommitValues(commits);
     return {
       section: 'hand',
       tableId,
@@ -489,7 +506,10 @@
       street: data.street ?? null,
       toActSeat: toSeatNumber(data.toActSeat ?? null),
       betToMatchCents: toNumber(data.betToMatchCents ?? null),
-      potCents: derivePot(commits, toNumber(data.potCents ?? null)),
+      potCents: derivePot(commits, potBankedRaw),
+      potBankedCents,
+      potDisplayCents: potBankedCents + streetPotCents,
+      streetPotCents,
       commits: commits || {},
       lastAggressorSeat: toSeatNumber(data.lastAggressorSeat ?? null),
       lastRaiseSizeCents: toNumber(data.lastRaiseSizeCents ?? null),

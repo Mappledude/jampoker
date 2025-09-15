@@ -16,11 +16,12 @@ export function computeLiveTurn(
   const commits = handDoc?.commits ?? {};
   const myCommit = commits[String(mySeat)] ?? 0;
   const toMatch = handDoc?.betToMatchCents ?? 0;
-  const derivedPot = Object.values(commits).reduce(
+  const streetPotCents = Object.values(commits).reduce(
     (sum: number, v: any) => sum + Number(v || 0),
     0
   );
-  const potCents = typeof handDoc?.potCents === 'number' ? handDoc.potCents : derivedPot;
+  const potBankedCents = typeof handDoc?.potCents === 'number' ? handDoc.potCents : 0;
+  const potDisplayCents = potBankedCents + streetPotCents;
   return {
     myUid: authUid,
     mySeat,
@@ -30,7 +31,10 @@ export function computeLiveTurn(
     toMatch,
     myCommit,
     owe: Math.max(0, toMatch - myCommit),
-    potCents,
+    potCents: potDisplayCents,
+    potBankedCents,
+    potDisplayCents,
+    streetPotCents,
   };
 }
 

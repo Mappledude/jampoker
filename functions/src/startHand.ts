@@ -65,6 +65,7 @@ export const startHand = onCall(async (request) => {
       toActSeat,
       street: 'preflop',
       betToMatchCents: bb,
+      potCents: 0,
       commits,
       lastAggressorSeat: bbSeat,
       updatedAt: FieldValue.serverTimestamp(),
