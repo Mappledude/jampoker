@@ -544,8 +544,12 @@
             }
             const t = tablesData[id];
             const uid = auth.currentUser?.uid;
-            if (uid && t.createdByUid === uid && !actionWorkers[id]) {
+            const isAdmin = !!(uid && t.createdByUid === uid);
+            if (isAdmin && !actionWorkers[id]) {
+              if (window.jamlog) window.jamlog.push('worker.attach', { tableId: id, isAdmin: true });
               actionWorkers[id] = startActionWorker(id);
+            } else if (!isAdmin && !actionWorkers[id]) {
+              if (window.jamlog) window.jamlog.push('worker.skip', { tableId: id, isAdmin: false });
             }
           }
         });

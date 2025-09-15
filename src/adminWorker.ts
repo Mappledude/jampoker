@@ -6,8 +6,6 @@ import {
   orderBy,
   limit,
   onSnapshot,
-  serverTimestamp,
-  updateDoc,
 } from 'firebase/firestore';
 import { getFunctions, httpsCallable } from 'firebase/functions';
 
@@ -23,34 +21,41 @@ export function startActionWorker(tableId: string) {
     limit(1)
   );
 
+  if ((window as any).jamlog) (window as any).jamlog.push('worker.start', { tableId });
+
   return onSnapshot(
     q,
     async (snap) => {
+      if (snap.empty) return;
+
       for (const docSnap of snap.docs) {
-        const actionRef = docSnap.ref;
+        const actionId = docSnap.id;
+
+        // Call the Cloud Function with { tableId, actionId }.
+        // The CF validates turn/actor, updates handState, and marks the action as applied.
         try {
-          await takeActionTX({ tableId, actionId: docSnap.id });
-          await updateDoc(actionRef, {
-            applied: true,
-            appliedAt: serverTimestamp(),
-          });
+          await takeActionTX({ tableId, actionId });
+
+          if ((window as any).jamlog) {
+            (window as any).jamlog.push('worker.cf.ok', { tableId, actionId });
+          }
         } catch (err: any) {
-          console.error('worker.apply.error', err);
-          await updateDoc(actionRef, {
-            applied: true,
-            invalid: true,
-            reason: err?.message || 'server-error',
-            error: err?.code || null,
-            appliedAt: serverTimestamp(),
-          });
+          // Do NOT try to write to /actions here (rules disallow updates).
+          const code = err?.code || 'unknown';
+          const message = err?.message || String(err);
+          console.error('worker.cf.error', { tableId, actionId, code, message });
+          if ((window as any).jamlog) {
+            (window as any).jamlog.push('worker.cf.error', { tableId, actionId, code, message });
+          }
         }
       }
     },
     (err) => {
-      console.error('srv.action.listener_error', {
-        code: err.code,
-        message: err.message,
-      });
+      console.error('srv.action.listener_error', { code: err.code, message: err.message });
+      if ((window as any).jamlog) {
+        (window as any).jamlog.push('worker.sub.error', { code: err.code, message: err.message });
+      }
     }
   );
 }
+
