@@ -23,8 +23,22 @@ export async function startHand(tableId) {
     logEvent('hand.start.ruleProbe', { tableId, path, uid, createdByUid, isAdmin, keys: [] });
     const callable = httpsCallable(fns, 'startHand');
     await callable({ tableId });
-    logEvent('hand.start.ok', { path });
-    if (window.jamlog) window.jamlog.push('hand.start.ok');
+    let handNoAfter = null;
+    try {
+      const handSnap = await getDoc(doc(db, path));
+      if (handSnap.exists()) {
+        const after = handSnap.data()?.handNo;
+        if (typeof after === 'number' && Number.isFinite(after)) handNoAfter = after;
+      }
+    } catch (err) {
+      console.warn('hand.start.inspect.fail', err);
+    }
+    logEvent('hand.start.ok', { path, tableId, handNoAfter });
+    if (window.jamlog) {
+      const ctx = { path, tableId };
+      if (handNoAfter !== null) ctx.handNoAfter = handNoAfter;
+      window.jamlog.push('hand.start.ok', ctx);
+    }
   } catch (err) {
     const code = err?.code;
     const msg = err?.message;
