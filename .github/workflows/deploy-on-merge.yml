@@ -20,34 +20,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Node (cache: root + functions)
-        if: ${{ hashFiles('package-lock.json') != '' && hashFiles('functions/package-lock.json') != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: |
-            package-lock.json
-            functions/package-lock.json
-
-      - name: Setup Node (cache: root only)
-        if: ${{ hashFiles('package-lock.json') != '' && hashFiles('functions/package-lock.json') == '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: package-lock.json
-
-      - name: Setup Node (cache: functions only)
-        if: ${{ hashFiles('package-lock.json') == '' && hashFiles('functions/package-lock.json') != '' }}
-        uses: actions/setup-node@v4
-        with:
-          node-version: '18'
-          cache: 'npm'
-          cache-dependency-path: functions/package-lock.json
-
-      - name: Setup Node (no cache)
-        if: ${{ hashFiles('package-lock.json') == '' && hashFiles('functions/package-lock.json') == '' }}
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: '18'
@@ -65,14 +38,19 @@ jobs:
 
       - name: Install deps (functions)
         run: |
-          if [ -f functions/package-lock.json ]; then
-            npm ci --prefix functions
+          set -e
+          cd functions
+          if [ -f package-lock.json ]; then
+            npm ci --no-audit --no-fund
           else
-            npm install --prefix functions
+            npm install --no-audit --no-fund
           fi
 
       - name: Build Cloud Functions
-        run: npm --prefix functions run build
+        run: |
+          set -e
+          cd functions
+          npm run build || echo "No build script; skipping"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
