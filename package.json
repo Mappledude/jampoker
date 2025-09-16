@@ -3,7 +3,8 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "tsx tests/**/*.spec.ts"
+    "test": "tsx tests/**/*.spec.ts",
+    "wipe:prod": "firebase firestore:delete -y -r players tables actions handState logs --project jam-poker"
   },
   "devDependencies": {
     "firebase-tools": "^13.26.0",
