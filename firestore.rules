@@ -1,82 +1,67 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
     function isSignedIn() {
       return request.auth != null;
     }
-
-    // Table creator/admin check
-    function isAdminOfTable(tableId) {
+    // Admin is the user whose uid matches tables/{tableId}.adminUid
+    function isTableAdmin(tableId) {
       return isSignedIn() &&
-        get(/databases/$(database)/documents/tables/$(tableId)).data.creatorUid == request.auth.uid;
+        get(/databases/$(database)/documents/tables/$(tableId)).data.adminUid == request.auth.uid;
     }
 
-    // Is the current user seated at this table? (seats indexed 0..8)
-    function isSeated(tableId) {
-      return
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/0) && get(/databases/$(database)/documents/tables/$(tableId)/seats/0).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/1) && get(/databases/$(database)/documents/tables/$(tableId)/seats/1).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/2) && get(/databases/$(database)/documents/tables/$(tableId)/seats/2).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/3) && get(/databases/$(database)/documents/tables/$(tableId)/seats/3).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/4) && get(/databases/$(database)/documents/tables/$(tableId)/seats/4).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/5) && get(/databases/$(database)/documents/tables/$(tableId)/seats/5).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/6) && get(/databases/$(database)/documents/tables/$(tableId)/seats/6).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/7) && get(/databases/$(database)/documents/tables/$(tableId)/seats/7).data.uid == request.auth.uid) ||
-        (exists(/databases/$(database)/documents/tables/$(tableId)/seats/8) && get(/databases/$(database)/documents/tables/$(tableId)/seats/8).data.uid == request.auth.uid);
-    }
-
-    // Root: tables/*
+    // Tables namespace
     match /tables/{tableId} {
-      // Everyone signed-in can read table shell
+      // Table documents are readable by any signed-in user (adjust if you want stricter)
       allow read: if isSignedIn();
-      // No client writes to the table doc itself
-      allow write: if false;
+      allow write: if false; // mutate tables only from Functions
 
-      // tables/{tableId}/players/*
+      // PLAYERS — visible to users, writable only by admin
       match /players/{playerId} {
         allow read: if isSignedIn();
-
-        // Admin may create players but cannot set assignedUid from the client
-        allow create: if isAdminOfTable(tableId) && !('assignedUid' in request.resource.data);
-
-        // Admin may update players, but NOT the assignedUid via client
-        allow update: if isAdminOfTable(tableId) &&
-          !request.resource.data.diff(resource.data).changedKeys().hasAny(['assignedUid']);
-
-        // Admin may delete players
-        allow delete: if isAdminOfTable(tableId);
+        allow create, update, delete: if isTableAdmin(tableId);
       }
 
-      // tables/{tableId}/seats/* — client NEVER writes; must use callable claimSeatTX (Functions/Admin SDK bypasses rules)
+      // SEATS — server/Functions only
       match /seats/{seatId} {
         allow read: if isSignedIn();
         allow write: if false;
       }
 
-      // tables/{tableId}/handState/*
+      // ACTIONS — clients may enqueue (create) their own actions only
+      match /actions/{actionId} {
+        allow read: if isSignedIn();
+
+        allow create: if isSignedIn()
+          && request.resource.data.actorUid == request.auth.uid
+          && request.resource.data.createdByUid == request.auth.uid
+          && request.resource.data.type is string
+          && request.resource.data.seat is int
+          && ( !('amountCents' in request.resource.data) || request.resource.data.amountCents is int )
+          // prevent clients from spoofing processor fields
+          && !('applied' in request.resource.data)
+          && !('invalid' in request.resource.data)
+          && !('reason' in request.resource.data);
+
+        allow update, delete: if false;
+      }
+
+      // HAND STATE — server/Functions only
       match /handState/{docId} {
         allow read: if isSignedIn();
         allow write: if false;
       }
 
-      // tables/{tableId}/actions/*
-      match /actions/{actionId} {
+      // COORDINATOR — server/Functions only
+      match /coordinator/{docId} {
         allow read: if isSignedIn();
-
-        // Players can enqueue their own actions only if they are seated
-        allow create: if isSignedIn() &&
-          isSeated(tableId) &&
-          request.resource.data.actorUid == request.auth.uid;
-
-        // No client updates/deletes of actions
-        allow update, delete: if false;
+        allow write: if false;
       }
     }
 
-    // Deny everything else by default
-    match /{document=**} {
-      allow read, write: if false;
+    // Optional: users profile
+    match /users/{uid} {
+      allow read, write: if isSignedIn() && request.auth.uid == uid;
     }
   }
 }
