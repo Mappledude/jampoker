@@ -670,7 +670,8 @@
         const tableDataForHud = hudSelectedTableId ? tablesData[hudSelectedTableId] : null;
         const tableName = tableDataForHud?.name || null;
         const owns = !!(hudSelectedTableId && currentUid && tableDataForHud?.createdByUid === currentUid);
-        adminHud.setContext({ tableId: hudSelectedTableId, isOwner: owns, tableName, autoStart: false });
+        const dealerChoice = tableDataForHud?.nextVariantId === 'omaha' ? 'omaha' : 'holdem';
+        adminHud.setContext({ tableId: hudSelectedTableId, isOwner: owns, tableName, autoStart: false, dealerChoice });
       }
     };
 
@@ -776,7 +777,8 @@
             return;
           }
           hudSelectedTableId = id;
-          adminHud?.setContext({ tableId: id, isOwner: true, tableName: tableInfo?.name || null, autoStart: false });
+          const dealerChoice = tableInfo?.nextVariantId === 'omaha' ? 'omaha' : 'holdem';
+          adminHud?.setContext({ tableId: id, isOwner: true, tableName: tableInfo?.name || null, autoStart: false, dealerChoice });
         }
       });
 

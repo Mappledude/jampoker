@@ -7,8 +7,11 @@ import {
   limit,
   onSnapshot,
   getDocs,
+  doc,
+  updateDoc,
 } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/10.12.5/firebase-functions.js";
+import { awaitAuthReady } from "/auth.js";
 
 const DEFAULT_MAX_ACTIONS = 5;
 
@@ -96,6 +99,7 @@ export function initAdminHud(config = {}) {
   const db = getFirestore();
   const functions = getFunctions();
   const takeActionTX = httpsCallable(functions, "takeActionTX");
+  const advanceStreetCallable = httpsCallable(functions, "advanceStreetTX");
 
   const jamlog = config.jamlog ?? (typeof window !== "undefined" ? window.jamlog : null);
   const page = config.page || "UNKNOWN";
@@ -116,7 +120,17 @@ export function initAdminHud(config = {}) {
     processing: false,
     exporting: false,
     selectedKey: null,
+    dealerChoice: "holdem",
+    dealerChoiceSaving: false,
+    nextStreetPending: false,
+    checkdownEnabled: false,
+    checkdownStatus: "Off",
+    handStreet: null,
   };
+
+  const CHECKDOWN_DELAY_MS = 3000;
+  let checkdownTimerId = null;
+  let checkdownCallPending = false;
 
   const root = createHudRoot();
   const header = document.createElement("div");
@@ -164,6 +178,67 @@ export function initAdminHud(config = {}) {
   const pendingEl = document.createElement("div");
   pendingEl.style.fontWeight = "600";
   pendingEl.style.fontSize = "12px";
+
+  const dealerRow = document.createElement("div");
+  dealerRow.style.display = "flex";
+  dealerRow.style.alignItems = "center";
+  dealerRow.style.justifyContent = "space-between";
+  dealerRow.style.gap = "8px";
+
+  const dealerLabel = document.createElement("label");
+  dealerLabel.textContent = "Dealer’s choice";
+  dealerLabel.style.display = "flex";
+  dealerLabel.style.alignItems = "center";
+  dealerLabel.style.gap = "6px";
+  dealerLabel.style.fontSize = "11px";
+
+  const dealerSelect = document.createElement("select");
+  dealerSelect.style.padding = "4px 8px";
+  dealerSelect.style.borderRadius = "8px";
+  dealerSelect.style.border = "1px solid #334155";
+  dealerSelect.style.background = "#0b1220";
+  dealerSelect.style.color = "#e2e8f0";
+  dealerSelect.style.fontSize = "12px";
+  dealerSelect.style.fontWeight = "600";
+  dealerSelect.style.minWidth = "120px";
+  dealerSelect.appendChild(new Option("Hold'em", "holdem"));
+  dealerSelect.appendChild(new Option("Omaha", "omaha"));
+  dealerLabel.appendChild(dealerSelect);
+  dealerRow.appendChild(dealerLabel);
+
+  const streetRow = document.createElement("div");
+  streetRow.style.display = "flex";
+  streetRow.style.alignItems = "center";
+  streetRow.style.gap = "10px";
+
+  const nextStreetBtn = createButton("Next Street");
+  nextStreetBtn.style.background = "#fbbf24";
+  nextStreetBtn.style.color = "#0f172a";
+  nextStreetBtn.style.flex = "1";
+
+  const checkdownLabel = document.createElement("label");
+  checkdownLabel.style.display = "flex";
+  checkdownLabel.style.alignItems = "center";
+  checkdownLabel.style.gap = "6px";
+  checkdownLabel.style.fontSize = "11px";
+
+  const checkdownToggle = document.createElement("input");
+  checkdownToggle.type = "checkbox";
+  checkdownToggle.style.margin = "0";
+
+  const checkdownText = document.createElement("span");
+  checkdownText.textContent = "Checkdown Mode";
+
+  checkdownLabel.appendChild(checkdownToggle);
+  checkdownLabel.appendChild(checkdownText);
+
+  const checkdownStatusEl = document.createElement("span");
+  checkdownStatusEl.style.fontSize = "11px";
+  checkdownStatusEl.style.opacity = "0.75";
+
+  streetRow.appendChild(nextStreetBtn);
+  streetRow.appendChild(checkdownLabel);
+  streetRow.appendChild(checkdownStatusEl);
 
   const buttonRow = document.createElement("div");
   buttonRow.style.display = "grid";
@@ -245,6 +320,8 @@ export function initAdminHud(config = {}) {
   body.appendChild(statusEl);
   body.appendChild(workerStateEl);
   body.appendChild(pendingEl);
+  body.appendChild(dealerRow);
+  body.appendChild(streetRow);
   body.appendChild(buttonRow);
   body.appendChild(exportOutput);
   body.appendChild(tableWrapper);
@@ -254,7 +331,7 @@ export function initAdminHud(config = {}) {
 
   attachTarget.appendChild(root);
 
-  const listeners = { pending: null, recent: null };
+  const listeners = { pending: null, recent: null, hand: null };
 
   function cleanupListeners() {
     if (listeners.pending) {
@@ -264,6 +341,169 @@ export function initAdminHud(config = {}) {
     if (listeners.recent) {
       listeners.recent();
       listeners.recent = null;
+    }
+    if (listeners.hand) {
+      listeners.hand();
+      listeners.hand = null;
+    }
+    if (checkdownTimerId) {
+      clearTimeout(checkdownTimerId);
+      checkdownTimerId = null;
+    }
+    checkdownCallPending = false;
+    state.handStreet = null;
+    updateCheckdownStatus();
+  }
+
+  const normalizeVariant = (value) => (value === "omaha" ? "omaha" : "holdem");
+
+  function detachHandListener() {
+    if (listeners.hand) {
+      listeners.hand();
+      listeners.hand = null;
+    }
+  }
+
+  function attachHandListener() {
+    if (listeners.hand || !state.tableId) return;
+    const handDoc = doc(db, `tables/${state.tableId}/handState/current`);
+    listeners.hand = onSnapshot(
+      handDoc,
+      (snap) => {
+        const data = snap.exists() ? snap.data() : null;
+        state.handStreet = typeof data?.street === "string" ? data.street : null;
+        evaluateCheckdown();
+      },
+      (err) => {
+        console.error("[adminHud] hand snapshot error", err);
+        state.handStreet = null;
+        evaluateCheckdown();
+      }
+    );
+  }
+
+  function cancelCheckdownTimer() {
+    if (checkdownTimerId) {
+      clearTimeout(checkdownTimerId);
+      checkdownTimerId = null;
+    }
+  }
+
+  function computeCheckdownStatus() {
+    if (!state.checkdownEnabled) return "Off";
+    if (!state.tableId) return "Select a table";
+    if (!state.handStreet) return "Waiting for hand";
+    if (state.handStreet === "showdown") return "At showdown";
+    if (state.pendingCount > 0) {
+      const count = state.pendingCount;
+      return `Waiting for ${count} action${count === 1 ? "" : "s"}`;
+    }
+    if (state.nextStreetPending || checkdownCallPending) return "Advancing…";
+    if (checkdownTimerId) return "Advancing shortly";
+    return "Ready";
+  }
+
+  function updateCheckdownStatus() {
+    state.checkdownStatus = computeCheckdownStatus();
+  }
+
+  function shouldAutoAdvance() {
+    if (!state.checkdownEnabled || !state.tableId) return false;
+    if (!state.handStreet || state.handStreet === "showdown") return false;
+    if (state.nextStreetPending || checkdownCallPending) return false;
+    return state.pendingCount === 0;
+  }
+
+  function scheduleCheckdown() {
+    if (checkdownTimerId || checkdownCallPending) return;
+    checkdownTimerId = setTimeout(() => {
+      checkdownTimerId = null;
+      if (!shouldAutoAdvance()) {
+        updateCheckdownStatus();
+        render();
+        return;
+      }
+      checkdownCallPending = true;
+      updateCheckdownStatus();
+      jamlogPush(jamlog, "hud.checkdown.autoAdvance.call", { tableId: state.tableId, page });
+      advanceStreet("checkdown");
+    }, CHECKDOWN_DELAY_MS);
+    updateCheckdownStatus();
+    render();
+  }
+
+  function evaluateCheckdown() {
+    if (!state.checkdownEnabled || !state.tableId) {
+      cancelCheckdownTimer();
+      checkdownCallPending = false;
+      updateCheckdownStatus();
+      render();
+      return;
+    }
+    attachHandListener();
+    if (!state.handStreet || state.handStreet === "showdown") {
+      cancelCheckdownTimer();
+      checkdownCallPending = false;
+      updateCheckdownStatus();
+      render();
+      return;
+    }
+    if (state.nextStreetPending || checkdownCallPending) {
+      updateCheckdownStatus();
+      render();
+      return;
+    }
+    if (state.pendingCount === 0) {
+      scheduleCheckdown();
+    } else {
+      cancelCheckdownTimer();
+      updateCheckdownStatus();
+      render();
+    }
+  }
+
+  async function advanceStreet(reason) {
+    if (!state.tableId || !state.isOwner) return;
+    if (state.nextStreetPending) return;
+    state.nextStreetPending = true;
+    if (reason === "manual") {
+      cancelCheckdownTimer();
+      checkdownCallPending = false;
+    }
+    updateCheckdownStatus();
+    render();
+
+    const tableId = state.tableId;
+    try {
+      if (reason === "manual") {
+        setStatus("Advancing street…");
+      } else {
+        setStatus("Checkdown advancing…");
+      }
+      await awaitAuthReady();
+      await advanceStreetCallable({ tableId });
+      if (reason === "manual") {
+        jamlogPush(jamlog, "hud.nextStreet.success", { tableId, page });
+      } else {
+        jamlogPush(jamlog, "hud.checkdown.autoAdvance.ok", { tableId, page });
+      }
+      setStatus("Advanced to next street.");
+    } catch (err) {
+      const message = err?.message || String(err);
+      setStatus(`Advance failed: ${message}`);
+      if (reason === "manual") {
+        jamlogPush(jamlog, "hud.nextStreet.fail", { tableId, page, message });
+      } else {
+        jamlogPush(jamlog, "hud.checkdown.autoAdvance.fail", { tableId, page, message });
+      }
+    } finally {
+      state.nextStreetPending = false;
+      if (reason === "checkdown") {
+        checkdownCallPending = false;
+      }
+      updateCheckdownStatus();
+      render();
+      evaluateCheckdown();
     }
   }
 
@@ -348,6 +588,12 @@ export function initAdminHud(config = {}) {
     pendingEl.textContent = state.tableId ? `Pending actions: ${state.pendingCount}` : "Pending actions: —";
     const running = isWorkerRunning();
     workerStateEl.textContent = state.tableId ? `Worker: ${running ? "running" : "stopped"}` : "Worker: —";
+    dealerSelect.value = state.dealerChoice;
+    dealerSelect.disabled = !state.tableId || !state.isOwner || state.dealerChoiceSaving;
+    nextStreetBtn.disabled = !state.tableId || !state.isOwner || state.nextStreetPending;
+    checkdownToggle.disabled = !state.tableId || !state.isOwner;
+    checkdownToggle.checked = state.checkdownEnabled && !checkdownToggle.disabled;
+    checkdownStatusEl.textContent = state.tableId ? state.checkdownStatus : "";
     startBtn.disabled = !state.tableId || !state.isOwner || running || state.processing;
     stopBtn.disabled = !state.tableId || !state.isOwner || !running;
     processBtn.disabled = !state.tableId || !state.isOwner || state.processing;
@@ -356,6 +602,7 @@ export function initAdminHud(config = {}) {
     syncButtonState(stopBtn);
     syncButtonState(processBtn);
     syncButtonState(exportBtn);
+    syncButtonState(nextStreetBtn);
     renderActions();
   }
 
@@ -376,6 +623,7 @@ export function initAdminHud(config = {}) {
 
   function handleSnapshotPending(snap) {
     state.pendingCount = snap.size;
+    evaluateCheckdown();
     render();
   }
 
@@ -537,6 +785,68 @@ export function initAdminHud(config = {}) {
     }
   }
 
+  dealerSelect.addEventListener("change", async (event) => {
+    const value = normalizeVariant(event.target.value);
+    if (!state.tableId || !state.isOwner) {
+      dealerSelect.value = state.dealerChoice;
+      return;
+    }
+    if (state.dealerChoiceSaving) {
+      dealerSelect.value = state.dealerChoice;
+      return;
+    }
+    const previous = state.dealerChoice;
+    if (value === previous) return;
+    state.dealerChoice = value;
+    state.dealerChoiceSaving = true;
+    render();
+    try {
+      await awaitAuthReady();
+      await updateDoc(doc(db, `tables/${state.tableId}`), { nextVariantId: value });
+      const label = value === "omaha" ? "Omaha" : "Hold'em";
+      setStatus(`Dealer’s choice set to ${label}.`);
+      jamlogPush(jamlog, "hud.dealerChoice.change", { tableId: state.tableId, page, variant: value });
+    } catch (err) {
+      console.error("[adminHud] dealer choice update failed", err);
+      state.dealerChoice = previous;
+      dealerSelect.value = previous;
+      setStatus(`Dealer’s choice update failed: ${err?.message || err}`);
+      jamlogPush(jamlog, "hud.dealerChoice.fail", { tableId: state.tableId, page, message: err?.message || String(err) });
+    } finally {
+      state.dealerChoiceSaving = false;
+      render();
+    }
+  });
+
+  nextStreetBtn.addEventListener("click", () => {
+    if (!state.tableId || !state.isOwner) return;
+    jamlogPush(jamlog, "hud.nextStreet.click", { tableId: state.tableId, page });
+    advanceStreet("manual");
+  });
+
+  checkdownToggle.addEventListener("change", () => {
+    if (!state.tableId || !state.isOwner) {
+      checkdownToggle.checked = state.checkdownEnabled;
+      return;
+    }
+    const enabled = !!checkdownToggle.checked;
+    if (enabled === state.checkdownEnabled) return;
+    state.checkdownEnabled = enabled;
+    if (enabled) {
+      jamlogPush(jamlog, "hud.checkdown.on", { tableId: state.tableId, page });
+      attachHandListener();
+    } else {
+      jamlogPush(jamlog, "hud.checkdown.off", { tableId: state.tableId, page });
+      cancelCheckdownTimer();
+      checkdownCallPending = false;
+      state.handStreet = null;
+      detachHandListener();
+    }
+    updateCheckdownStatus();
+    render();
+    evaluateCheckdown();
+  });
+
   startBtn.addEventListener("click", () => {
     maybeStartWorker("manual");
   });
@@ -556,16 +866,22 @@ export function initAdminHud(config = {}) {
     return str ? str : null;
   }
 
-  function setContext({ tableId, isOwner, tableName = null, autoStart = false } = {}) {
+  function setContext({ tableId, isOwner, tableName = null, autoStart = false, dealerChoice = null } = {}) {
     const normalizedId = normalizeId(tableId);
     const normalizedName = tableName ? String(tableName) : null;
     const key = `${normalizedId || "-"}|${isOwner ? "1" : "0"}|${normalizedName || "-"}`;
+    const normalizedDealerChoice = normalizeVariant(dealerChoice);
     const changed = key !== state.selectedKey;
     state.selectedKey = key;
     if (!changed) {
+      if (normalizedDealerChoice !== state.dealerChoice) {
+        state.dealerChoice = normalizedDealerChoice;
+        render();
+      }
       if (autoStart && normalizedId && isOwner) {
         maybeStartWorker("auto");
       }
+      updateCheckdownStatus();
       render();
       return;
     }
@@ -576,6 +892,15 @@ export function initAdminHud(config = {}) {
     state.pendingCount = 0;
     state.actions = [];
     exportOutput.value = "";
+    state.dealerChoice = normalizedDealerChoice;
+    state.dealerChoiceSaving = false;
+    state.nextStreetPending = false;
+    state.checkdownEnabled = false;
+    state.handStreet = null;
+    state.checkdownStatus = "Off";
+    checkdownToggle.checked = false;
+    cancelCheckdownTimer();
+    checkdownCallPending = false;
     if (!state.isOwner || !state.tableId) {
       setStatus(state.tableId ? "HUD available to table owner." : "Select a table you own.");
       render();
@@ -587,6 +912,7 @@ export function initAdminHud(config = {}) {
     if (autoStart) {
       maybeStartWorker("auto");
     }
+    updateCheckdownStatus();
   }
 
   function destroy() {

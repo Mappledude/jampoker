@@ -137,6 +137,9 @@
           lastAggressorSeat: toSeatNumber(safe.lastAggressorSeat ?? null),
           lastRaiseSizeCents: toCents(safe.lastRaiseSizeCents ?? null),
           lastRaiseToCents: toCents(safe.lastRaiseToCents ?? null),
+          community: Array.isArray(safe.community)
+            ? safe.community.filter((card) => typeof card === 'string')
+            : [],
         };
       };
 
@@ -366,7 +369,7 @@
           },
           getWorkerState: (tid) => !!tableWorkerUnsub && tid === tableId,
         });
-        tableHud.setContext({ tableId, isOwner: true, tableName, autoStart: true });
+        tableHud.setContext({ tableId, isOwner: true, tableName, autoStart: true, dealerChoice: adminVariant });
         window.addEventListener('beforeunload', () => {
           try {
             tableHud?.destroy?.();
@@ -894,8 +897,34 @@
       renderPlayerBoard();
     }
 
+    let lastCommunitySignature = null;
+    let lastCommunityCount = 0;
+
     function renderSeats() {
       const maxSeats = tableData?.maxSeats || seatData.length || 0;
+      const communityCards = Array.isArray(handState?.community) ? handState.community : [];
+      const previousCount = lastCommunityCount || 0;
+      const prevSignature = lastCommunitySignature;
+      const signature = communityCards.join('|');
+      const communityRow = document.createElement('div');
+      communityRow.className = 'community-row';
+      communityRow.classList.toggle('community-row--empty', communityCards.length === 0);
+      communityCards.forEach((card, idx) => {
+        const cardEl = document.createElement('span');
+        cardEl.className = 'card-chip community-card';
+        cardEl.textContent = formatCard(card);
+        if (prevSignature !== signature && idx >= previousCount) {
+          cardEl.classList.add('enter');
+          requestAnimationFrame(() => cardEl.classList.remove('enter'));
+        }
+        communityRow.appendChild(cardEl);
+      });
+      if (signature !== prevSignature) {
+        lastCommunitySignature = signature;
+        if (window.jamlog) window.jamlog.push('community.render', { count: communityCards.length });
+      }
+      lastCommunityCount = communityCards.length;
+
       const ring = document.createElement('div');
       ring.className = 'seat-ring';
       for (let i = 0; i < maxSeats; i++) {
@@ -952,6 +981,7 @@
         ring.appendChild(seatEl);
       }
       seatsEl.innerHTML = '';
+      seatsEl.appendChild(communityRow);
       seatsEl.appendChild(ring);
     }
 

@@ -4,7 +4,7 @@ import { awaitAuthReady } from "/auth.js";
 import { logEvent } from "/js/debug.js";
 
 const functions = getFunctions(app);
-const advanceStreetCallable = httpsCallable(functions, "forceAdvanceStreet");
+const advanceStreetCallable = httpsCallable(functions, "advanceStreetTX");
 
 let activeTableId = null;
 let listenerAttached = false;
@@ -65,21 +65,21 @@ async function handleAdvanceClick(button) {
   button.disabled = true;
   const tableId = activeTableId;
 
-  logEvent("ui.advanceStreet.start", { tableId });
-  if (window.jamlog) window.jamlog.push("ui.advanceStreet.start", { tableId });
+  logEvent("hud.nextStreet.click", { tableId, source: "table-ui" });
+  if (window.jamlog) window.jamlog.push("hud.nextStreet.click", { tableId, source: "table-ui" });
   const dismissInfo = showToast("Advancing street…", "info", { duration: 2000 });
 
   try {
     await awaitAuthReady();
     await advanceStreetCallable({ tableId });
-    logEvent("ui.advanceStreet.ok", { tableId });
-    if (window.jamlog) window.jamlog.push("ui.advanceStreet.ok", { tableId });
+    logEvent("hud.nextStreet.success", { tableId, source: "table-ui" });
+    if (window.jamlog) window.jamlog.push("hud.nextStreet.success", { tableId, source: "table-ui" });
     dismissInfo();
     showToast("Advanced to next street", "success");
   } catch (err) {
     const message = err?.message || "Unknown error";
-    logEvent("ui.advanceStreet.fail", { tableId, message });
-    if (window.jamlog) window.jamlog.push("ui.advanceStreet.fail", { tableId, message });
+    logEvent("hud.nextStreet.fail", { tableId, message, source: "table-ui" });
+    if (window.jamlog) window.jamlog.push("hud.nextStreet.fail", { tableId, message, source: "table-ui" });
     console.error("forceAdvanceStreet failed", err);
     dismissInfo();
     showToast(`Failed to advance street: ${message}`, "error");
