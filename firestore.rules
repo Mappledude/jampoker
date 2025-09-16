@@ -1,67 +1,9 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isSignedIn() {
-      return request.auth != null;
-    }
-    // Admin is the user whose uid matches tables/{tableId}.adminUid
-    function isTableAdmin(tableId) {
-      return isSignedIn() &&
-        get(/databases/$(database)/documents/tables/$(tableId)).data.adminUid == request.auth.uid;
-    }
-
-    // Tables namespace
-    match /tables/{tableId} {
-      // Table documents are readable by any signed-in user (adjust if you want stricter)
-      allow read: if isSignedIn();
-      allow write: if false; // mutate tables only from Functions
-
-      // PLAYERS — visible to users, writable only by admin
-      match /players/{playerId} {
-        allow read: if isSignedIn();
-        allow create, update, delete: if isTableAdmin(tableId);
-      }
-
-      // SEATS — server/Functions only
-      match /seats/{seatId} {
-        allow read: if isSignedIn();
-        allow write: if false;
-      }
-
-      // ACTIONS — clients may enqueue (create) their own actions only
-      match /actions/{actionId} {
-        allow read: if isSignedIn();
-
-        allow create: if isSignedIn()
-          && request.resource.data.actorUid == request.auth.uid
-          && request.resource.data.createdByUid == request.auth.uid
-          && request.resource.data.type is string
-          && request.resource.data.seat is int
-          && ( !('amountCents' in request.resource.data) || request.resource.data.amountCents is int )
-          // prevent clients from spoofing processor fields
-          && !('applied' in request.resource.data)
-          && !('invalid' in request.resource.data)
-          && !('reason' in request.resource.data);
-
-        allow update, delete: if false;
-      }
-
-      // HAND STATE — server/Functions only
-      match /handState/{docId} {
-        allow read: if isSignedIn();
-        allow write: if false;
-      }
-
-      // COORDINATOR — server/Functions only
-      match /coordinator/{docId} {
-        allow read: if isSignedIn();
-        allow write: if false;
-      }
-    }
-
-    // Optional: users profile
-    match /users/{uid} {
-      allow read, write: if isSignedIn() && request.auth.uid == uid;
+    match /{doc=**} {
+      allow read: false;
+      allow write: false;
     }
   }
 }
