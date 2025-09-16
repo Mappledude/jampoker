@@ -1,9 +1,77 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{doc=**} {
-      allow read: false;
-      allow write: false;
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Short-term dev backstop so you don't get locked out.
+    function isDevAdmin() {
+      return isSignedIn() && request.auth.uid in [
+        "qluorW7OtXddS2WZnGPxG0R7HDk1" // YOU (owner)
+      ];
+    }
+
+    // Preferred: set custom claim { admin: true } on your user.
+    function isAdmin() {
+      return isSignedIn() && (request.auth.token.admin == true || isDevAdmin());
+    }
+
+    function isRegisteredPlayer() {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/players/$(request.auth.uid));
+    }
+
+    // Players registry
+    match /players/{playerId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+    }
+
+    // Tables and subcollections
+    match /tables/{tableId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isAdmin();
+
+      // seats/{seatIndex}
+      match /seats/{seatId} {
+        allow read: if isSignedIn();
+
+        // player can take a seat only if registered; can only claim as self
+        allow update: if isRegisteredPlayer()
+          && request.resource.data.uid == request.auth.uid
+          && (resource.data.uid == null || resource.data.uid == request.auth.uid);
+
+        // admin can fix/clear
+        allow create, delete: if isAdmin();
+      }
+
+      // actions/{actionId}
+      match /actions/{actionId} {
+        allow read: if isSignedIn();
+
+        // player may enqueue their own action for their current seat
+        allow create: if isRegisteredPlayer()
+          && request.resource.data.actorUid == request.auth.uid
+          && request.resource.data.seat is int
+          && exists(/databases/$(database)/documents/tables/$(tableId)/seats/$(request.resource.data.seat))
+          && get(/databases/$(database)/documents/tables/$(tableId)/seats/$(request.resource.data.seat)).data.uid == request.auth.uid;
+
+        // only admin edits/deletes after creation
+        allow update, delete: if isAdmin();
+      }
+
+      // handState/*
+      match /handState/{docId} {
+        allow read: if isSignedIn();
+        allow write: if false; // server-only
+      }
+    }
+
+    // Default deny
+    match /{document=**} {
+      allow read, write: if false;
     }
   }
 }

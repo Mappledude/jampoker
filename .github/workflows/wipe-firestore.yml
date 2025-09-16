@@ -1,0 +1,55 @@
+name: Wipe Firestore (prod)
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: "Type WIPE to confirm deleting Firestore collections in jam-poker"
+        required: true
+        default: "WIPE"
+
+jobs:
+  wipe:
+    if: ${{ github.event.inputs.confirm == 'WIPE' }}
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 18
+
+      - name: Write service account key
+        # Add a GitHub Secret named FIREBASE_SERVICE_ACCOUNT (full JSON)
+        run: |
+          echo "${FIREBASE_SERVICE_ACCOUNT}" > "$HOME/gcp-key.json"
+          echo "GOOGLE_APPLICATION_CREDENTIALS=$HOME/gcp-key.json" >> $GITHUB_ENV
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+
+      - name: Install firebase-tools
+        run: npm i -g firebase-tools@14.16.0
+
+      - name: Show firebase-tools version
+        run: firebase --version
+
+      - name: Set project
+        run: firebase use jam-poker --project jam-poker
+
+      - name: Wipe Firestore collections (recursive)
+        run: |
+          set -euo pipefail
+          # Add/remove collections as needed
+          TARGETS=(players tables actions handState logs)
+          for COL in "${TARGETS[@]}"; do
+            echo "Deleting collection: $COL"
+            firebase firestore:delete -y -r "$COL" --project jam-poker || true
+          done
+          echo "Done."
+
