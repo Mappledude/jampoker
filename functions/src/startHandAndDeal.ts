@@ -15,9 +15,20 @@ const makeDeck = (): string[] => {
   return deck;
 };
 
-const shuffleInPlace = (deck: string[]) => {
-  for (let i = deck.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
+const createSeededRng = (seed: number) => {
+  let t = seed >>> 0;
+  return () => {
+    t += 0x6d2b79f5;
+    let r = Math.imul(t ^ (t >>> 15), t | 1);
+    r ^= r + Math.imul(r ^ (r >>> 7), r | 61);
+    return ((r ^ (r >>> 14)) >>> 0) / 4294967296;
+  };
+};
+
+const shuffleWithSeed = (deck: string[], seed: number) => {
+  const rng = createSeededRng(seed);
+  for (let i = deck.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(rng() * (i + 1));
     [deck[i], deck[j]] = [deck[j], deck[i]];
   }
 };
@@ -121,7 +132,9 @@ export const startHandAndDeal = onCall(async (request) => {
     const potCents = Object.values(commits).reduce((sum, value) => sum + (Number.isFinite(value) ? value : 0), 0);
 
     const deck = makeDeck();
-    shuffleInPlace(deck);
+    const seed = Math.floor(Math.random() * 0xffffffff);
+    shuffleWithSeed(deck, seed);
+    const remaining: string[] = deck.slice();
 
     const cardsPerSeat = normalizedVariant === 'omaha' ? 4 : 2;
     const dealingOrder: number[] = [];
@@ -134,17 +147,17 @@ export const startHandAndDeal = onCall(async (request) => {
     const seatCards = new Map<number, string[]>();
     dealingOrder.forEach((seat) => seatCards.set(seat, []));
 
-    let deckIndex = 0;
     for (let round = 0; round < cardsPerSeat; round += 1) {
       for (const seat of dealingOrder) {
-        const card = deck[deckIndex];
-        deckIndex += 1;
+        const card = remaining.shift();
         if (!card) {
           throw new HttpsError('internal', 'deck-exhausted');
         }
         seatCards.get(seat)!.push(card);
       }
     }
+
+    const deckRef = db.doc(`tables/${tableId}/hands/${String(nextHandNo)}/deck`);
 
     const players = occupiedSeats.map(({ seatIndex, uid: seatUid }) => ({ seat: seatIndex, uid: seatUid }));
 
@@ -183,6 +196,14 @@ export const startHandAndDeal = onCall(async (request) => {
       updatedAt: FieldValue.serverTimestamp(),
       version: FieldValue.increment(1),
       lastWriteBy: 'cf:startHandAndDeal',
+    });
+
+    tx.set(deckRef, {
+      seed,
+      remaining,
+      burned: [],
+      createdAt: FieldValue.serverTimestamp(),
+      updatedAt: FieldValue.serverTimestamp(),
     });
 
     return {

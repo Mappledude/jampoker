@@ -10,6 +10,17 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/tables/$(tableId)).data.createdByUid == request.auth.uid;
     }
 
+    function isTableMember(tableId) {
+      if (request.auth == null) return false;
+      let tableDoc = get(/databases/$(database)/documents/tables/$(tableId)).data;
+      if (tableDoc == null) return false;
+      if (tableDoc.createdByUid == request.auth.uid) return true;
+      let seats = tableDoc.seats;
+      return seats is list && seats.where(seat =>
+        seat.uid == request.auth.uid || seat.occupiedBy == request.auth.uid
+      ).size() > 0;
+    }
+
 
     // Helpers for key shape validation
     function onlyAllowedKeys(allowed) {
@@ -66,7 +77,7 @@ service cloud.firestore {
 
       // Canonical hand state path:
       match /handState/{docId} {
-        allow read: if true;
+        allow read: if isTableMember(tableId);
         // Only admins may directly modify hand state; players enqueue actions instead
         allow write: if isAdmin(tableId);
       }

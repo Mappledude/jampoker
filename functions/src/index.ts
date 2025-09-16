@@ -6,7 +6,8 @@ import { onRequest } from "firebase-functions/v2/https";
 import { onDocumentWritten, onDocumentUpdated, onDocumentCreated } from "firebase-functions/v2/firestore";
 
 export { takeActionTX } from "./takeActionTX";
-export { forceAdvanceStreet } from "./forceAdvanceStreet";
+export { advanceStreetTX } from "./advanceStreetTX";
+export { forceShowdownTX } from "./forceShowdownTX";
 export { leaveSeatTX } from "./leaveSeatTX";
 export { onHandEndCleanup } from "./handEnd";
 export { pokerCall } from "./pokerCall";
