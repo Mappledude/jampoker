@@ -1,0 +1,32 @@
+name: Diagnose Firebase Hosting
+
+on:
+  workflow_dispatch:
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Install Firebase CLI
+        run: npm install -g firebase-tools
+      - name: Check FIREBASE_TOKEN
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          if [ -z "$FIREBASE_TOKEN" ]; then
+            echo "FIREBASE_TOKEN is not set" >&2
+            exit 1
+          fi
+      - name: Print firebase.json
+        run: cat firebase.json
+      - name: List hosting channels
+        env:
+          FIREBASE_TOKEN: ${{ secrets.FIREBASE_TOKEN }}
+        run: |
+          set -e
+          for SITE in jampoker jam-poker; do
+            echo "Listing channels for $SITE"
+            npx firebase-tools hosting:channel:list --site "$SITE" || true
+          done
